@@ -83,12 +83,19 @@ class _AuthClient:
         if not self.client_id or not self.client_secret:
             raise ValueError("client_id and client_secret are required.")
 
-    def _headers(self) -> dict[str, str]:
+    def get_headers(self) -> dict[str, str]:
         """Return the headers for the API."""
         return {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.client_secret}",
+            "Authorization": f"Bearer {self._get_bearer_token()}",
         }
+
+    def _get_bearer_token(self) -> str:
+        """Get the bearer token."""
+        if not self._authed_user or self._authed_user.expiry < TS_NOW():
+            auth_code = self._get_auth_code()
+            self._authed_user = self._get_access_token(auth_code)
+        return self._authed_user.access_token
 
     def _get_auth_code(self) -> str:
         """Get the authorization code."""

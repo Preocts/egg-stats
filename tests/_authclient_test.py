@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 from egg_stats._authclient import _AuthClient
+from egg_stats._authclient import _AuthedUser
 from egg_stats._authclient import HTTPResponse
 
 
@@ -120,6 +121,46 @@ def test_get_response_url(auth_client: _AuthClient) -> None:
     assert result == expected
 
 
+def test_get_auth_code(auth_client: _AuthClient) -> None:
+    challenge = "mock_challenge"
+    auth_url = "https://account.withings.com/oauth2_user/authorize2"
+    rd_url = f"https://localhost:8080/?code=foo&state={challenge}"
+    expected = "foo"
+    mock_get_response = MagicMock(status_code=302, url=auth_url)
+
+    with patch.object(auth_client, "_code_challenge", return_value=challenge):
+        with patch.object(auth_client._http, "get", return_value=mock_get_response):
+            with patch.object(auth_client, "_get_response_url") as mock_input:
+                mock_input.return_value = rd_url
+                result = auth_client._get_auth_code()
+
+    mock_input.assert_called_once_with(auth_url)
+    assert result == expected
+
+
+def test_get_auth_code_invalid_response(auth_client: _AuthClient) -> None:
+    auth_url = "https://account.withings.com/oauth2_user/authorize2"
+    mock_get_response = MagicMock(status_code=403, url=auth_url)
+
+    with patch.object(auth_client._http, "get", return_value=mock_get_response):
+        with pytest.raises(ValueError):
+            auth_client._get_auth_code()
+
+
+def test_get_auth_code_challenge_mismatch(auth_client: _AuthClient) -> None:
+    challenge = "mock_challenge"
+    auth_url = "https://account.withings.com/oauth2_user/authorize2"
+    rd_url = "https://localhost:8080/?code=foo&state=bar"
+    mock_get_response = MagicMock(status_code=302, url=auth_url)
+
+    with patch.object(auth_client, "_code_challenge", return_value=challenge):
+        with patch.object(auth_client._http, "get", return_value=mock_get_response):
+            with patch.object(auth_client, "_get_response_url") as mock_input:
+                mock_input.return_value = rd_url
+                with pytest.raises(ValueError):
+                    auth_client._get_auth_code()
+
+
 def test_get_access_token(auth_client: _AuthClient) -> None:
     mockresp = HTTPResponse(MagicMock())
     mockresp.json = MagicMock(
@@ -146,3 +187,57 @@ def test_get_access_token(auth_client: _AuthClient) -> None:
     assert result.scope == "user.activity,user.metrics"
     assert result.expiry > datetime.utcnow().timestamp()
     assert result.token_type == "Bearer"
+
+
+def test_get_access_token_invalid_response(auth_client: _AuthClient) -> None:
+    mockresp = HTTPResponse(MagicMock())
+    mockresp.json = MagicMock(return_value={"status": 1})
+    mockresp.is_success = False
+
+    with patch.object(auth_client._http, "post", return_value=mockresp):
+        with pytest.raises(ValueError):
+            auth_client._get_access_token("mockcode")
+
+
+def test_get_bearer_token_with_existing(auth_client: _AuthClient) -> None:
+    auth_client._authed_user = _AuthedUser(
+        userid="mockuserid",
+        access_token="mock_access_token",
+        refresh_token="mock_refresh_token",
+        scope="user.activity,user.metrics",
+        expiry=int(datetime.utcnow().timestamp()) + 1000,
+        token_type="Bearer",
+    )
+
+    result = auth_client._get_bearer_token()
+
+    assert result == auth_client._authed_user.access_token
+
+
+def test_get_bearer_token_full_process(auth_client: _AuthClient) -> None:
+    mock_auth_user = _AuthedUser(
+        userid="mockuserid",
+        access_token="mock_access_token",
+        refresh_token="mock_refresh_token",
+        scope="user.activity,user.metrics",
+        expiry=int(datetime.utcnow().timestamp()) + 1000,
+        token_type="Bearer",
+    )
+    with patch.object(auth_client, "_get_auth_code") as mock_code:
+        mock_code.return_value = "mockcode"
+        with patch.object(auth_client, "_get_access_token") as mock_token:
+            mock_token.return_value = mock_auth_user
+            result = auth_client._get_bearer_token()
+
+    mock_code.assert_called_once()
+    mock_token.assert_called_once_with("mockcode")
+    assert result == mock_auth_user.access_token
+
+
+def test_get_headers(auth_client: _AuthClient) -> None:
+    with patch.object(auth_client, "_get_bearer_token") as mock_token:
+        mock_token.return_value = "mocktoken"
+        result = auth_client.get_headers()
+
+    mock_token.assert_called_once()
+    assert result["Authorization"] == "Bearer mocktoken"
