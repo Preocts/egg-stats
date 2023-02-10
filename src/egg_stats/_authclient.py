@@ -6,8 +6,8 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
-from datetime import datetime
 
 import httpx
 
@@ -19,6 +19,7 @@ REDIRECT_URI = "https://localhost:8080"
 
 AUTH_URL = "https://account.withings.com/oauth2_user/authorize2"
 ACCESS_URL = "https://wbsapi.withings.net/v2/oauth2"
+NONCE_URL = "https://wbsapi.withings.net/v2/signature"
 VALID_CODES = [302]
 
 
@@ -94,7 +95,7 @@ class _AuthClient:
         if self._authed_user is None:
             auth_code = self._get_auth_code()
             self._authed_user = self._get_access_token(auth_code)
-        elif self._authed_user.expiry < datetime.utcnow().timestamp():
+        elif self._authed_user.expiry < time.time():
             self._authed_user = self._refresh_access_token(self._authed_user)
         return self._authed_user.access_token
 
@@ -144,9 +145,7 @@ class _AuthClient:
             userid=resp.json["body"]["userid"],
             access_token=resp.json["body"]["access_token"],
             refresh_token=resp.json["body"]["refresh_token"],
-            expiry=datetime.utcnow().timestamp()
-            + resp.json["body"]["expires_in"]
-            - EXPIRY_BUFFER,
+            expiry=time.time() + resp.json["body"]["expires_in"] - EXPIRY_BUFFER,
             scope=resp.json["body"]["scope"],
             token_type=resp.json["body"]["token_type"],
             csrf_token=resp.json["body"].get("csrf_token"),
@@ -154,7 +153,6 @@ class _AuthClient:
 
     def _refresh_access_token(self, authed_user: _AuthedUser) -> _AuthedUser:
         """Refresh the access token."""
-        print("Refreshing access token...")
         params = {
             "action": "requesttoken",
             "client_id": self.client_id,
@@ -171,13 +169,52 @@ class _AuthClient:
             userid=resp.json["body"]["userid"],
             access_token=resp.json["body"]["access_token"],
             refresh_token=resp.json["body"]["refresh_token"],
-            expiry=datetime.utcnow().timestamp()
-            + resp.json["body"]["expires_in"]
-            - EXPIRY_BUFFER,
+            expiry=time.time() + resp.json["body"]["expires_in"] - EXPIRY_BUFFER,
             scope=resp.json["body"]["scope"],
             token_type=resp.json["body"]["token_type"],
             csrf_token=resp.json["body"].get("csrf_token"),
         )
+
+    def _revoke_access_token(self) -> None:
+        """Revoke the access token."""
+        timestamp = str(int(time.time()))
+        userid = self._authed_user.userid if self._authed_user else ""
+        params = {
+            "action": "revoke",
+            "client_id": self.client_id,
+            "nonce": self._get_nonce(),
+            "signature": self._create_signature("revoke", timestamp),
+            "userid": userid,
+        }
+
+        resp = HTTPResponse(self._http.post(ACCESS_URL, params=params))
+
+        if not resp.is_success:
+            raise ValueError(f"Failed to revoke access token: {resp.text}")
+
+    def _get_nonce(self) -> str:
+        """Get a nonce."""
+        timestamp = str(int(time.time()))
+        params = {
+            "action": "getnonce",
+            "client_id": self.client_id,
+            "signature": self._create_signature("getnonce", timestamp),
+            "timestamp": timestamp,
+        }
+        resp = HTTPResponse(self._http.post(NONCE_URL, params=params))
+
+        if not resp.is_success:
+            raise ValueError(f"Failed to get nonce: {resp.text}")
+
+        return resp.json["body"]["nonce"]
+
+    def _create_signature(self, action: str, timestamp: str) -> str:
+        """Create the signature for a nonce request."""
+        import hmac
+
+        hash_string = f"{action},{self.client_id},{timestamp}".encode()
+        secret = self.client_secret or ""
+        return hmac.digest(secret.encode("utf-8"), hash_string, hashlib.sha256).hex()
 
     @staticmethod
     def _get_response_url(url: str) -> str:
@@ -208,3 +245,12 @@ class _AuthClient:
         code_byte = hashlib.sha256(code_verifier.encode("utf-8")).digest()
         code_challenge = base64.urlsafe_b64encode(code_byte).decode("utf-8")
         return code_challenge.replace("=", "")
+
+
+if __name__ == "__main__":
+    from secretbox import SecretBox
+
+    SecretBox(auto_load=True)
+    client = _AuthClient()
+
+    client._revoke_access_token()
