@@ -110,6 +110,7 @@ class _AuthClient:
 
     def _get_auth_code(self) -> str:
         """Get the authorization code."""
+        self.logger.debug("Getting auth code for client_id %s", self.client_id)
         code_verifier = self._code_verifier()
         code_challenge = self._code_challenge(code_verifier)
 
@@ -136,7 +137,7 @@ class _AuthClient:
 
     def _get_access_token(self, code: str) -> _AuthedUser:
         """Get the access token given the authorization code."""
-        print("Getting access token...")
+        self.logger.debug("Getting access token for client_id %s", self.client_id)
         params = {
             "action": "requesttoken",
             "client_id": self.client_id,
@@ -162,6 +163,7 @@ class _AuthClient:
 
     def _refresh_access_token(self, authed_user: _AuthedUser) -> _AuthedUser:
         """Refresh the access token."""
+        self.logger.debug("Refreshing access token for client_id %s", self.client_id)
         params = {
             "action": "requesttoken",
             "client_id": self.client_id,
@@ -187,6 +189,7 @@ class _AuthClient:
     def _revoke_access_token(self) -> None:
         """Revoke the access token."""
         userid = self._authed_user.userid if self._authed_user else ""
+        self.logger.debug("Revoking access token for user %s", userid)
         nonce = self._get_nonce()
         params = {
             "action": "revoke",
@@ -203,6 +206,7 @@ class _AuthClient:
 
     def _get_nonce(self) -> str:
         """Get a nonce."""
+        self.logger.debug("Getting nonce for client_id %s", self.client_id)
         timestamp = str(int(time.time()))
         params = {
             "action": "getnonce",
