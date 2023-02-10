@@ -9,9 +9,9 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
-from egg_stats._authclient import _AuthClient
-from egg_stats._authclient import _AuthedUser
-from egg_stats._authclient import HTTPResponse
+from egg_stats.withings_provider import _AuthClient
+from egg_stats.withings_provider import _AuthedUser
+from egg_stats.withings_provider import HTTPResponse
 
 MOCK_AUTH_USER: Any = {
     "userid": "mockuserid",
@@ -84,7 +84,7 @@ def test_HTTPResponse_handles_200() -> None:
 
 
 def test_AuthClient_raises_ValueError_if_no_client_id() -> None:
-    from egg_stats._authclient import _AuthClient
+    from egg_stats.withings_provider import _AuthClient
 
     with pytest.raises(ValueError):
         _AuthClient()

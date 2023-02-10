@@ -1,3 +1,4 @@
+"""Connect to and interact with the Withings API."""
 from __future__ import annotations
 
 import base64
