@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import logging
 import os
+import re
+from datetime import datetime
 
 import httpx
+
+TS_NOW = datetime.utcnow().timestamp
+EXPIRY_BUFFER = 60  # seconds
+
+GRANT_TYPE = "authorization_code"
+SCOPES = "user.activity, user.metrics"
+REDIRECT_URI = "https://localhost:8080"
 
 
 class HTTPResponse:
@@ -51,3 +62,25 @@ class _AuthClient:
             raise ValueError("client_id and client_secret are required.")
 
         self._http = httpx.Client()
+        self._bearer: str | None = None
+        self._expiry: float | None = None
+
+    def _headers(self) -> dict[str, str]:
+        """Return the headers for the API."""
+        return {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.client_secret}",
+        }
+
+    @staticmethod
+    def _code_verifier() -> str:
+        """Create a code verifier."""
+        code_verifier = base64.urlsafe_b64encode(os.urandom(30)).decode("utf-8")
+        return re.sub("[^a-zA-Z0-9]+", "", code_verifier)
+
+    @staticmethod
+    def _code_challenge(code_verifier: str) -> str:
+        """Create a code challenge."""
+        code_byte = hashlib.sha256(code_verifier.encode("utf-8")).digest()
+        code_challenge = base64.urlsafe_b64encode(code_byte).decode("utf-8")
+        return code_challenge.replace("=", "")

@@ -23,6 +23,11 @@ def mock_env() -> Generator[None, None, None]:
         yield None
 
 
+@pytest.fixture
+def auth_client() -> _AuthClient:
+    return _AuthClient("mock", "mock")
+
+
 def test_HTTPResponse_handles_204() -> None:
     """Test the HTTPResponse class."""
     response = MagicMock()
@@ -80,3 +85,17 @@ def test_AuthClient_reads_secrets_from_args() -> None:
 
     assert auth_client.client_id == "high"
     assert auth_client.client_secret == "low"
+
+
+def test__code_verifier(auth_client: _AuthClient) -> None:
+    result = auth_client._code_verifier()
+
+    assert isinstance(result, str)
+
+
+def test__code_challenge(auth_client: _AuthClient) -> None:
+    verifier = "happy go lucky"
+    expected = "F9i_m3bYeE8Wrw_rHubiV4coAXzx9eDbRxK_1dVnfX0"
+    result = auth_client._code_challenge(verifier)
+
+    assert result == expected
