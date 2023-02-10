@@ -87,15 +87,33 @@ def test_AuthClient_reads_secrets_from_args() -> None:
     assert auth_client.client_secret == "low"
 
 
-def test__code_verifier(auth_client: _AuthClient) -> None:
+def test_code_verifier(auth_client: _AuthClient) -> None:
     result = auth_client._code_verifier()
 
     assert isinstance(result, str)
 
 
-def test__code_challenge(auth_client: _AuthClient) -> None:
+def test_code_challenge(auth_client: _AuthClient) -> None:
     verifier = "happy go lucky"
     expected = "F9i_m3bYeE8Wrw_rHubiV4coAXzx9eDbRxK_1dVnfX0"
     result = auth_client._code_challenge(verifier)
+
+    assert result == expected
+
+
+def test_split_response(auth_client: _AuthClient) -> None:
+    response = "https://localhost:8080/?code=foo&state=bar"
+    expected = ("foo", "bar")
+    result = auth_client._split_response(response)
+
+    assert result == expected
+
+
+def test_get_response_url(auth_client: _AuthClient) -> None:
+    url = "https://account.withings.com/oauth2_user/authorize2"
+    expected = "https://localhost:8080/?code=foo&state=bar"
+
+    with patch("builtins.input", return_value=expected):
+        result = auth_client._get_response_url(url)
 
     assert result == expected
