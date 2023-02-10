@@ -186,13 +186,13 @@ class _AuthClient:
 
     def _revoke_access_token(self) -> None:
         """Revoke the access token."""
-        timestamp = str(int(time.time()))
         userid = self._authed_user.userid if self._authed_user else ""
+        nonce = self._get_nonce()
         params = {
             "action": "revoke",
             "client_id": self.client_id,
-            "nonce": self._get_nonce(),
-            "signature": self._create_signature("revoke", timestamp),
+            "nonce": nonce,
+            "signature": self._create_signature("revoke", nonce),
             "userid": userid,
         }
 
@@ -211,7 +211,7 @@ class _AuthClient:
             "timestamp": timestamp,
         }
         resp = HTTPResponse(self._http.post(NONCE_URL, params=params))
-        print(resp.is_success)
+
         if not resp.is_success:
             raise ValueError(f"Failed to get nonce: {resp.text}")
 
@@ -254,12 +254,3 @@ class _AuthClient:
         code_byte = hashlib.sha256(code_verifier.encode("utf-8")).digest()
         code_challenge = base64.urlsafe_b64encode(code_byte).decode("utf-8")
         return code_challenge.replace("=", "")
-
-
-if __name__ == "__main__":
-    from secretbox import SecretBox
-
-    SecretBox(auto_load=True)
-    client = _AuthClient()
-
-    client._revoke_access_token()
