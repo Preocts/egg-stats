@@ -4,6 +4,7 @@ import os
 from collections.abc import Generator
 from datetime import datetime
 from json import JSONDecodeError
+from typing import Any
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
@@ -11,6 +12,26 @@ import pytest
 from egg_stats._authclient import _AuthClient
 from egg_stats._authclient import _AuthedUser
 from egg_stats._authclient import HTTPResponse
+
+MOCK_AUTH_USER: Any = {
+    "userid": "mockuserid",
+    "access_token": "mock_access_token",
+    "refresh_token": "mock_refresh_token",
+    "scope": "user.activity,user.metrics",
+    "expiry": int(datetime.utcnow().timestamp()) + 1000,
+    "token_type": "Bearer",
+}
+MOCK_AUTH_RESPONSE: Any = {
+    "status": 0,
+    "body": {
+        "userid": "mockuserid",
+        "access_token": "mock_access_token",
+        "refresh_token": "mock_refresh_token",
+        "scope": "user.activity,user.metrics",
+        "expires_in": int(datetime.utcnow().timestamp()) + 1000,
+        "token_type": "Bearer",
+    },
+}
 
 
 @pytest.fixture(autouse=True)
@@ -200,14 +221,7 @@ def test_get_access_token_invalid_response(auth_client: _AuthClient) -> None:
 
 
 def test_get_bearer_token_with_existing(auth_client: _AuthClient) -> None:
-    auth_client._authed_user = _AuthedUser(
-        userid="mockuserid",
-        access_token="mock_access_token",
-        refresh_token="mock_refresh_token",
-        scope="user.activity,user.metrics",
-        expiry=int(datetime.utcnow().timestamp()) + 1000,
-        token_type="Bearer",
-    )
+    auth_client._authed_user = _AuthedUser(**MOCK_AUTH_USER)
 
     result = auth_client._get_bearer_token()
 
@@ -215,23 +229,27 @@ def test_get_bearer_token_with_existing(auth_client: _AuthClient) -> None:
 
 
 def test_get_bearer_token_full_process(auth_client: _AuthClient) -> None:
-    mock_auth_user = _AuthedUser(
-        userid="mockuserid",
-        access_token="mock_access_token",
-        refresh_token="mock_refresh_token",
-        scope="user.activity,user.metrics",
-        expiry=int(datetime.utcnow().timestamp()) + 1000,
-        token_type="Bearer",
-    )
     with patch.object(auth_client, "_get_auth_code") as mock_code:
         mock_code.return_value = "mockcode"
         with patch.object(auth_client, "_get_access_token") as mock_token:
-            mock_token.return_value = mock_auth_user
+            mock_token.return_value = _AuthedUser(**MOCK_AUTH_USER)
             result = auth_client._get_bearer_token()
 
     mock_code.assert_called_once()
     mock_token.assert_called_once_with("mockcode")
-    assert result == mock_auth_user.access_token
+    assert result == MOCK_AUTH_RESPONSE["body"]["access_token"]
+
+
+def test_get_bearer_token_refresh(auth_client: _AuthClient) -> None:
+    auth_client._authed_user = _AuthedUser(**MOCK_AUTH_USER)
+    auth_client._authed_user.expiry = 0
+
+    with patch.object(auth_client, "_refresh_access_token") as mock_refresh:
+        mock_refresh.return_value = _AuthedUser(**MOCK_AUTH_USER)
+        result = auth_client._get_bearer_token()
+
+    mock_refresh.assert_called_once()
+    assert result == MOCK_AUTH_RESPONSE["body"]["access_token"]
 
 
 def test_get_headers(auth_client: _AuthClient) -> None:
@@ -241,3 +259,24 @@ def test_get_headers(auth_client: _AuthClient) -> None:
 
     mock_token.assert_called_once()
     assert result["Authorization"] == "Bearer mocktoken"
+
+
+def test_refresh_access_token(auth_client: _AuthClient) -> None:
+    mock_post_resp = HTTPResponse(MagicMock())
+    mock_post_resp.json = MagicMock(return_value=MOCK_AUTH_RESPONSE, status_code=200)
+
+    with patch.object(auth_client._http, "post", return_value=mock_post_resp):
+        result = auth_client._refresh_access_token(_AuthedUser(**MOCK_AUTH_USER))
+
+    assert result.userid == MOCK_AUTH_USER["userid"]
+    assert result.access_token == MOCK_AUTH_USER["access_token"]
+
+
+def test_refresh_access_token_invalid_response(auth_client: _AuthClient) -> None:
+    mock_post_resp = HTTPResponse(MagicMock())
+    mock_post_resp.json = MagicMock(return_value={"status": 1})
+    mock_post_resp.is_success = False
+
+    with patch.object(auth_client._http, "post", return_value=mock_post_resp):
+        with pytest.raises(ValueError):
+            auth_client._refresh_access_token(_AuthedUser(**MOCK_AUTH_USER))

@@ -11,7 +11,6 @@ from datetime import datetime
 
 import httpx
 
-TS_NOW = datetime.utcnow().timestamp
 EXPIRY_BUFFER = 60  # seconds
 TIMEOUT = 30  # seconds
 
@@ -42,7 +41,7 @@ class _AuthedUser:
     userid: str
     access_token: str
     refresh_token: str
-    expiry: int
+    expiry: float
     scope: str
     token_type: str
     csrf_token: str | None = None
@@ -92,9 +91,11 @@ class _AuthClient:
 
     def _get_bearer_token(self) -> str:
         """Get the bearer token."""
-        if not self._authed_user or self._authed_user.expiry < TS_NOW():
+        if self._authed_user is None:
             auth_code = self._get_auth_code()
             self._authed_user = self._get_access_token(auth_code)
+        elif self._authed_user.expiry < datetime.utcnow().timestamp():
+            self._authed_user = self._refresh_access_token(self._authed_user)
         return self._authed_user.access_token
 
     def _get_auth_code(self) -> str:
@@ -125,6 +126,7 @@ class _AuthClient:
 
     def _get_access_token(self, code: str) -> _AuthedUser:
         """Get the access token given the authorization code."""
+        print("Getting access token...")
         params = {
             "action": "requesttoken",
             "client_id": self.client_id,
@@ -142,7 +144,36 @@ class _AuthClient:
             userid=resp.json["body"]["userid"],
             access_token=resp.json["body"]["access_token"],
             refresh_token=resp.json["body"]["refresh_token"],
-            expiry=TS_NOW() + resp.json["body"]["expires_in"] - EXPIRY_BUFFER,
+            expiry=datetime.utcnow().timestamp()
+            + resp.json["body"]["expires_in"]
+            - EXPIRY_BUFFER,
+            scope=resp.json["body"]["scope"],
+            token_type=resp.json["body"]["token_type"],
+            csrf_token=resp.json["body"].get("csrf_token"),
+        )
+
+    def _refresh_access_token(self, authed_user: _AuthedUser) -> _AuthedUser:
+        """Refresh the access token."""
+        print("Refreshing access token...")
+        params = {
+            "action": "requesttoken",
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+            "grant_type": "refresh_token",
+            "refresh_token": authed_user.refresh_token,
+        }
+        resp = HTTPResponse(self._http.post(ACCESS_URL, params=params))
+
+        if not resp.is_success:
+            raise ValueError(f"Failed to refresh access token: {resp.text}")
+
+        return _AuthedUser(
+            userid=resp.json["body"]["userid"],
+            access_token=resp.json["body"]["access_token"],
+            refresh_token=resp.json["body"]["refresh_token"],
+            expiry=datetime.utcnow().timestamp()
+            + resp.json["body"]["expires_in"]
+            - EXPIRY_BUFFER,
             scope=resp.json["body"]["scope"],
             token_type=resp.json["body"]["token_type"],
             csrf_token=resp.json["body"].get("csrf_token"),
@@ -177,12 +208,3 @@ class _AuthClient:
         code_byte = hashlib.sha256(code_verifier.encode("utf-8")).digest()
         code_challenge = base64.urlsafe_b64encode(code_byte).decode("utf-8")
         return code_challenge.replace("=", "")
-
-
-if __name__ == "__main__":
-    from secretbox import SecretBox
-
-    SecretBox(auto_load=True)
-    client = _AuthClient()
-    code = client._get_auth_code()
-    print(client._get_access_token(code))
