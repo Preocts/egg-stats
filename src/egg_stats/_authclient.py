@@ -8,6 +8,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -20,21 +21,29 @@ REDIRECT_URI = "https://localhost:8080"
 AUTH_URL = "https://account.withings.com/oauth2_user/authorize2"
 ACCESS_URL = "https://wbsapi.withings.net/v2/oauth2"
 NONCE_URL = "https://wbsapi.withings.net/v2/signature"
-VALID_CODES = [302]
+VALID_RESP_CODES = [200, 302]
+VALID_STATUS_CODES = [0, 200, 204]
 
 
 class HTTPResponse:
     def __init__(self, response: httpx.Response) -> None:
         """Representation for the HTTP response from the API."""
         try:
-            self.json = response.json()
+            self._json = response.json()
         except json.JSONDecodeError:
-            self.json = {}
+            self._json = {}
 
         self.text = response.text
         self.status_code = response.status_code
         self.url = str(response.url)
-        self.is_success = response.is_success
+        self.is_success = (
+            self.status_code in VALID_RESP_CODES
+            and self._json.get("status") in VALID_STATUS_CODES
+        )
+
+    def json(self) -> dict[str, Any]:
+        """Return the JSON response."""
+        return self._json
 
 
 @dataclass
@@ -114,7 +123,7 @@ class _AuthClient:
 
         resp = HTTPResponse(self._http.get(AUTH_URL, params=params))
 
-        if resp.status_code not in VALID_CODES:
+        if resp.status_code not in VALID_RESP_CODES:
             raise ValueError(f"Failed to get auth code: {resp.text}")
 
         response_url = self._get_response_url(resp.url)
@@ -142,13 +151,13 @@ class _AuthClient:
             raise ValueError(f"Failed to get access token: {resp.text}")
 
         return _AuthedUser(
-            userid=resp.json["body"]["userid"],
-            access_token=resp.json["body"]["access_token"],
-            refresh_token=resp.json["body"]["refresh_token"],
-            expiry=time.time() + resp.json["body"]["expires_in"] - EXPIRY_BUFFER,
-            scope=resp.json["body"]["scope"],
-            token_type=resp.json["body"]["token_type"],
-            csrf_token=resp.json["body"].get("csrf_token"),
+            userid=resp.json()["body"]["userid"],
+            access_token=resp.json()["body"]["access_token"],
+            refresh_token=resp.json()["body"]["refresh_token"],
+            expiry=time.time() + resp.json()["body"]["expires_in"] - EXPIRY_BUFFER,
+            scope=resp.json()["body"]["scope"],
+            token_type=resp.json()["body"]["token_type"],
+            csrf_token=resp.json()["body"].get("csrf_token"),
         )
 
     def _refresh_access_token(self, authed_user: _AuthedUser) -> _AuthedUser:
@@ -166,13 +175,13 @@ class _AuthClient:
             raise ValueError(f"Failed to refresh access token: {resp.text}")
 
         return _AuthedUser(
-            userid=resp.json["body"]["userid"],
-            access_token=resp.json["body"]["access_token"],
-            refresh_token=resp.json["body"]["refresh_token"],
-            expiry=time.time() + resp.json["body"]["expires_in"] - EXPIRY_BUFFER,
-            scope=resp.json["body"]["scope"],
-            token_type=resp.json["body"]["token_type"],
-            csrf_token=resp.json["body"].get("csrf_token"),
+            userid=resp.json()["body"]["userid"],
+            access_token=resp.json()["body"]["access_token"],
+            refresh_token=resp.json()["body"]["refresh_token"],
+            expiry=time.time() + resp.json()["body"]["expires_in"] - EXPIRY_BUFFER,
+            scope=resp.json()["body"]["scope"],
+            token_type=resp.json()["body"]["token_type"],
+            csrf_token=resp.json()["body"].get("csrf_token"),
         )
 
     def _revoke_access_token(self) -> None:
@@ -202,11 +211,11 @@ class _AuthClient:
             "timestamp": timestamp,
         }
         resp = HTTPResponse(self._http.post(NONCE_URL, params=params))
-
+        print(resp.is_success)
         if not resp.is_success:
             raise ValueError(f"Failed to get nonce: {resp.text}")
 
-        return resp.json["body"]["nonce"]
+        return resp.json()["body"]["nonce"]
 
     def _create_signature(self, action: str, timestamp: str) -> str:
         """Create the signature for a nonce request."""

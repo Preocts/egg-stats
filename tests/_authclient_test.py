@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Generator
-from datetime import datetime
 from json import JSONDecodeError
 from typing import Any
 from unittest.mock import MagicMock
@@ -18,7 +18,7 @@ MOCK_AUTH_USER: Any = {
     "access_token": "mock_access_token",
     "refresh_token": "mock_refresh_token",
     "scope": "user.activity,user.metrics",
-    "expiry": int(datetime.utcnow().timestamp()) + 1000,
+    "expiry": time.time() + 1000,
     "token_type": "Bearer",
 }
 MOCK_AUTH_RESPONSE: Any = {
@@ -28,7 +28,7 @@ MOCK_AUTH_RESPONSE: Any = {
         "access_token": "mock_access_token",
         "refresh_token": "mock_refresh_token",
         "scope": "user.activity,user.metrics",
-        "expires_in": int(datetime.utcnow().timestamp()) + 1000,
+        "expires_in": time.time() + 1000,
         "token_type": "Bearer",
     },
 }
@@ -51,33 +51,33 @@ def auth_client() -> _AuthClient:
     return _AuthClient("mock", "mock")
 
 
-def test_HTTPResponse_handles_204() -> None:
+def test_HTTPResponse_handles_empty_json() -> None:
     """Test the HTTPResponse class."""
     response = MagicMock()
     response.json.side_effect = JSONDecodeError("msg", "doc", 0)
     response.status_code = 204
     response.url = "https://example.com"
-    response.is_success = True
+    response.is_success = False
 
     http_response = HTTPResponse(response)
 
-    assert http_response.json == {}
+    assert http_response.json() == {}
     assert http_response.status_code == 204
     assert http_response.url == "https://example.com"
-    assert http_response.is_success is True
+    assert http_response.is_success is False
 
 
 def test_HTTPResponse_handles_200() -> None:
     """Test the HTTPResponse class."""
     response = MagicMock()
-    response.json.return_value = {"foo": "bar"}
+    response.json.return_value = {"status": 0}
     response.status_code = 200
     response.url = "https://example.com"
     response.is_success = True
 
     http_response = HTTPResponse(response)
 
-    assert http_response.json == {"foo": "bar"}
+    assert http_response.json() == {"status": 0}
     assert http_response.status_code == 200
     assert http_response.url == "https://example.com"
     assert http_response.is_success is True
@@ -183,21 +183,18 @@ def test_get_auth_code_challenge_mismatch(auth_client: _AuthClient) -> None:
 
 
 def test_get_access_token(auth_client: _AuthClient) -> None:
-    mockresp = HTTPResponse(MagicMock())
-    mockresp.json = MagicMock(
-        return_value={
-            "status": 0,
-            "body": {
-                "userid": "30588767",
-                "access_token": "mock_access_token",
-                "refresh_token": "mock_refresh_token",
-                "scope": "user.activity,user.metrics",
-                "expires_in": 10800,
-                "token_type": "Bearer",
-            },
-        }
-    )
-    mockresp.is_success = True
+    mockresp = MagicMock(status_code=200, json=MagicMock())
+    mockresp.json.return_value = {
+        "status": 0,
+        "body": {
+            "userid": "30588767",
+            "access_token": "mock_access_token",
+            "refresh_token": "mock_refresh_token",
+            "scope": "user.activity,user.metrics",
+            "expires_in": 10800,
+            "token_type": "Bearer",
+        },
+    }
 
     with patch.object(auth_client._http, "post", return_value=mockresp):
         result = auth_client._get_access_token("mockcode")
@@ -206,14 +203,13 @@ def test_get_access_token(auth_client: _AuthClient) -> None:
     assert result.access_token == "mock_access_token"
     assert result.refresh_token == "mock_refresh_token"
     assert result.scope == "user.activity,user.metrics"
-    assert result.expiry > datetime.utcnow().timestamp()
+    assert result.expiry > time.time()
     assert result.token_type == "Bearer"
 
 
 def test_get_access_token_invalid_response(auth_client: _AuthClient) -> None:
-    mockresp = HTTPResponse(MagicMock())
-    mockresp.json = MagicMock(return_value={"status": 1})
-    mockresp.is_success = False
+    mockresp = MagicMock(status_code=200, json=MagicMock())
+    mockresp.json.return_value = MagicMock(return_value={"status": 1})
 
     with patch.object(auth_client._http, "post", return_value=mockresp):
         with pytest.raises(ValueError):
@@ -262,8 +258,8 @@ def test_get_headers(auth_client: _AuthClient) -> None:
 
 
 def test_refresh_access_token(auth_client: _AuthClient) -> None:
-    mock_post_resp = HTTPResponse(MagicMock())
-    mock_post_resp.json = MagicMock(return_value=MOCK_AUTH_RESPONSE, status_code=200)
+    mock_post_resp = MagicMock(status_code=200, json=MagicMock())
+    mock_post_resp.json.return_value = MOCK_AUTH_RESPONSE
 
     with patch.object(auth_client._http, "post", return_value=mock_post_resp):
         result = auth_client._refresh_access_token(_AuthedUser(**MOCK_AUTH_USER))
@@ -273,10 +269,40 @@ def test_refresh_access_token(auth_client: _AuthClient) -> None:
 
 
 def test_refresh_access_token_invalid_response(auth_client: _AuthClient) -> None:
-    mock_post_resp = HTTPResponse(MagicMock())
-    mock_post_resp.json = MagicMock(return_value={"status": 1})
-    mock_post_resp.is_success = False
+    mock_post_resp = MagicMock(
+        status_code=200,
+        json=MagicMock(return_value={"status": 1}),
+    )
 
     with patch.object(auth_client._http, "post", return_value=mock_post_resp):
         with pytest.raises(ValueError):
             auth_client._refresh_access_token(_AuthedUser(**MOCK_AUTH_USER))
+
+
+def test_create_signature(auth_client: _AuthClient) -> None:
+    result = auth_client._create_signature("mockdata", "12345")
+    # This is the expected result of the above data and timestamp
+    assert result == "8b3db37b7c80908b944b7fc5164c42b235da89772cf56c745a734bf74dac287a"
+
+
+def test_get_nonce(auth_client: _AuthClient) -> None:
+    mock_resp = MagicMock(
+        status_code=200,
+        json=MagicMock(
+            return_value={"status": 0, "body": {"nonce": "mock"}},
+        ),
+    )
+
+    with patch.object(auth_client._http, "post", return_value=mock_resp):
+        result = auth_client._get_nonce()
+
+    assert result == "mock"
+
+
+def test_get_nonce_invalid_response(auth_client: _AuthClient) -> None:
+    mock_resp = MagicMock(status_code=200, json=MagicMock())
+    mock_resp._json = {"status": 503, "body": {"nonce": "mock"}}
+
+    with patch.object(auth_client._http, "post", return_value=mock_resp):
+        with pytest.raises(ValueError):
+            auth_client._get_nonce()
