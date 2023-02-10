@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Generator
+from datetime import datetime
 from json import JSONDecodeError
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -117,3 +118,31 @@ def test_get_response_url(auth_client: _AuthClient) -> None:
         result = auth_client._get_response_url(url)
 
     assert result == expected
+
+
+def test_get_access_token(auth_client: _AuthClient) -> None:
+    mockresp = HTTPResponse(MagicMock())
+    mockresp.json = MagicMock(
+        return_value={
+            "status": 0,
+            "body": {
+                "userid": "30588767",
+                "access_token": "mock_access_token",
+                "refresh_token": "mock_refresh_token",
+                "scope": "user.activity,user.metrics",
+                "expires_in": 10800,
+                "token_type": "Bearer",
+            },
+        }
+    )
+    mockresp.is_success = True
+
+    with patch.object(auth_client._http, "post", return_value=mockresp):
+        result = auth_client._get_access_token("mockcode")
+
+    assert result.userid == "30588767"
+    assert result.access_token == "mock_access_token"
+    assert result.refresh_token == "mock_refresh_token"
+    assert result.scope == "user.activity,user.metrics"
+    assert result.expiry > datetime.utcnow().timestamp()
+    assert result.token_type == "Bearer"

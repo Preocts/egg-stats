@@ -15,12 +15,11 @@ TS_NOW = datetime.utcnow().timestamp
 EXPIRY_BUFFER = 60  # seconds
 TIMEOUT = 30  # seconds
 
-RESPONSE_TYPE = "code"
-GRANT_TYPE = "authorization_code"
 SCOPES = "user.activity,user.metrics"
 REDIRECT_URI = "https://localhost:8080"
 
 AUTH_URL = "https://account.withings.com/oauth2_user/authorize2"
+ACCESS_URL = "https://wbsapi.withings.net/v2/oauth2"
 VALID_CODES = [302]
 
 
@@ -45,8 +44,8 @@ class _AuthedUser:
     refresh_token: str
     expiry: int
     scope: str
-    csrf_token: str
     token_type: str
+    csrf_token: str | None = None
 
 
 class _AuthClient:
@@ -97,7 +96,7 @@ class _AuthClient:
         code_challenge = self._code_challenge(code_verifier)
 
         params = {
-            "response_type": RESPONSE_TYPE,
+            "response_type": "code",
             "client_id": self.client_id,
             "scope": SCOPES,
             "state": code_challenge,
@@ -116,6 +115,31 @@ class _AuthClient:
             raise ValueError("Code challenge does not match state.")
 
         return code
+
+    def _get_access_token(self, code: str) -> _AuthedUser:
+        """Get the access token given the authorization code."""
+        params = {
+            "action": "requesttoken",
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": REDIRECT_URI,
+        }
+        resp = HTTPResponse(self._http.post(ACCESS_URL, params=params))
+
+        if not resp.is_success:
+            raise ValueError(f"Failed to get access token: {resp.text}")
+
+        return _AuthedUser(
+            userid=resp.json["body"]["userid"],
+            access_token=resp.json["body"]["access_token"],
+            refresh_token=resp.json["body"]["refresh_token"],
+            expiry=TS_NOW() + resp.json["body"]["expires_in"] - EXPIRY_BUFFER,
+            scope=resp.json["body"]["scope"],
+            token_type=resp.json["body"]["token_type"],
+            csrf_token=resp.json["body"].get("csrf_token"),
+        )
 
     @staticmethod
     def _get_response_url(url: str) -> str:
@@ -153,4 +177,5 @@ if __name__ == "__main__":
 
     SecretBox(auto_load=True)
     client = _AuthClient()
-    print(client._get_auth_code())
+    code = client._get_auth_code()
+    print(client._get_access_token(code))
