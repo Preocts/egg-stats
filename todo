@@ -1,0 +1,3 @@
+extract http methods and error handling
+give _AuthedUser a class method from response
+track nonce token, expiry; clear on use
