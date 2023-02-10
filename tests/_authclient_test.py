@@ -306,3 +306,22 @@ def test_get_nonce_invalid_response(auth_client: _AuthClient) -> None:
     with patch.object(auth_client._http, "post", return_value=mock_resp):
         with pytest.raises(ValueError):
             auth_client._get_nonce()
+
+
+def test_revoke_access_token(auth_client: _AuthClient) -> None:
+    mock_resp = MagicMock(status_code=200, json=MagicMock())
+    mock_resp.json.return_value = {"status": 0, "body": {}}
+
+    with patch.object(auth_client._http, "post", return_value=mock_resp):
+        with patch.object(auth_client, "_get_nonce", return_value="mocknonce"):
+            auth_client._revoke_access_token()
+
+
+def test_revoke_access_token_invalid_response(auth_client: _AuthClient) -> None:
+    mock_resp = MagicMock(status_code=200, json=MagicMock())
+    mock_resp.json.return_value = {"status": 1, "body": {}}
+
+    with patch.object(auth_client._http, "post", return_value=mock_resp):
+        with patch.object(auth_client, "_get_nonce", return_value="mocknonce"):
+            with pytest.raises(ValueError):
+                auth_client._revoke_access_token()
