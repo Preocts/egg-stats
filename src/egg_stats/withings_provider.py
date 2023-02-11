@@ -24,6 +24,25 @@ AUTH_URL = "https://account.withings.com/oauth2_user/authorize2"
 BASE_URL = "https://wbsapi.withings.net"
 VALID_RESP_CODES = [200, 302]
 VALID_STATUS_CODES = [0, 200, 204]
+BEARER_DEBUG = ""
+
+DATA_FIELDS = [
+    "steps",
+    "distance",
+    "elevation",
+    "soft",
+    "moderate",
+    "intense",
+    "active",
+    "calories",
+    "totalcalories",
+    "hr_average",
+    "hr_min",
+    "hr_max",
+    "hr_zone_0",
+    "hr_zone_1",
+    "hr_zone_3",
+]
 
 
 class HTTPResponse:
@@ -110,6 +129,32 @@ class WithingsProvider:
             resp = self._handle_http("POST", url, params)
 
             records.extend(resp.json()["body"].get("series", []))
+            more = resp.json()["body"].get("more", False)
+            params["offset"] = resp.json()["body"].get("offset", 0)
+
+            self.logger.debug("Discovered %s records (more: %s)", len(records), more)
+
+        return records
+
+    def activity_range(self, number_of_days: int = 7) -> list[dict[str, Any]]:
+        """Get aggregated activity data for a given period of time."""
+        self.logger.debug("Getting activity range for %s days", number_of_days)
+        starttime = int(time.time()) - number_of_days * 24 * 60 * 60
+        startdateymd = time.strftime("%Y-%m-%d", time.localtime(starttime))
+        enddateymd = time.strftime("%Y-%m-%d", time.localtime())
+        params = {
+            "action": "getactivity",
+            "startdateymd": startdateymd,
+            "enddateymd": enddateymd,
+            "data_fields": ",".join(DATA_FIELDS),
+        }
+        url = f"{BASE_URL}/v2/measure"
+        more = True
+        records: list[dict[str, Any]] = []
+        while more:
+            resp = self._handle_http("POST", url, params)
+
+            records.extend(resp.json()["body"].get("activities", []))
             more = resp.json()["body"].get("more", False)
             params["offset"] = resp.json()["body"].get("offset", 0)
 
