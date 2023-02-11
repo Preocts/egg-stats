@@ -93,6 +93,19 @@ def test_HTTPResponse_handles_200() -> None:
     assert http_response.is_success is True
 
 
+def test_AuthedUser_from_dict() -> None:
+    body = MOCK_AUTH_RESPONSE["body"]
+    authed_user = _AuthedUser.from_dict(body)
+
+    assert authed_user.userid == body["userid"]
+    assert authed_user.access_token == body["access_token"]
+    assert authed_user.refresh_token == body["refresh_token"]
+    assert authed_user.scope == body["scope"]
+    # Less than due to the expiry buffer being subtracted
+    assert authed_user.expiry < time.time() + body["expires_in"]
+    assert authed_user.token_type == body["token_type"]
+
+
 def test_AuthClient_raises_ValueError_if_no_client_id() -> None:
     from egg_stats.withings_provider import _AuthClient
 
@@ -153,41 +166,40 @@ def test_get_response_url(auth_client: _AuthClient) -> None:
 
 
 def test_get_auth_code(auth_client: _AuthClient) -> None:
+    resp = HTTPResponse(MagicMock())
+    resp.url = "https://account.withings.com/oauth2_user/authorize2"
     challenge = "mock_challenge"
-    auth_url = "https://account.withings.com/oauth2_user/authorize2"
     rd_url = f"https://localhost:8080/?code=foo&state={challenge}"
     expected = "foo"
-    mock_get_response = MagicMock(status_code=302, json=MagicMock(), url=auth_url)
-    mock_get_response.json.return_value = {"status": 0, "body": {"test": "test"}}
+    expected_params = {
+        "response_type": "code",
+        "client_id": "mock",
+        "scope": withings_provider.SCOPES,
+        "state": challenge,
+        "redirect_uri": withings_provider.REDIRECT_URI,
+    }
 
     with patch.object(auth_client, "_code_challenge", return_value=challenge):
-        with patch.object(auth_client._http, "request", return_value=mock_get_response):
+        with patch.object(auth_client, "_handle_http", return_value=resp) as mock_http:
             with patch.object(auth_client, "_get_response_url") as mock_input:
                 mock_input.return_value = rd_url
                 result = auth_client._get_auth_code()
 
-    mock_input.assert_called_once_with(auth_url)
+    mock_input.assert_called_once_with(resp.url)
     assert result == expected
-
-
-def test_get_auth_code_invalid_response(auth_client: _AuthClient) -> None:
-    auth_url = "https://account.withings.com/oauth2_user/authorize2"
-    mock_get_response = MagicMock(status_code=403, url=auth_url)
-
-    with patch.object(auth_client._http, "request", return_value=mock_get_response):
-        with pytest.raises(ValueError, match="^Failed"):
-            auth_client._get_auth_code()
+    mock_http.assert_called_once_with(
+        "GET", withings_provider.AUTH_URL, params=expected_params
+    )
 
 
 def test_get_auth_code_challenge_mismatch(auth_client: _AuthClient) -> None:
+    resp = HTTPResponse(MagicMock())
+    resp.url = "https://account.withings.com/oauth2_user/authorize2"
     challenge = "mock_challenge"
-    auth_url = "https://account.withings.com/oauth2_user/authorize2"
     rd_url = "https://localhost:8080/?code=foo&state=bar"
-    mock_get_response = MagicMock(status_code=302, json=MagicMock(), url=auth_url)
-    mock_get_response.json.return_value = {"status": 0, "body": {"test": "test"}}
 
     with patch.object(auth_client, "_code_challenge", return_value=challenge):
-        with patch.object(auth_client._http, "request", return_value=mock_get_response):
+        with patch.object(auth_client, "_handle_http", return_value=resp):
             with patch.object(auth_client, "_get_response_url") as mock_input:
                 mock_input.return_value = rd_url
                 with pytest.raises(ValueError, match="^Challenge"):
@@ -195,37 +207,23 @@ def test_get_auth_code_challenge_mismatch(auth_client: _AuthClient) -> None:
 
 
 def test_get_access_token(auth_client: _AuthClient) -> None:
-    mockresp = MagicMock(status_code=200, json=MagicMock())
-    mockresp.json.return_value = {
-        "status": 0,
-        "body": {
-            "userid": "30588767",
-            "access_token": "mock_access_token",
-            "refresh_token": "mock_refresh_token",
-            "scope": "user.activity,user.metrics",
-            "expires_in": 10800,
-            "token_type": "Bearer",
-        },
+    mockresp = HTTPResponse(MagicMock())
+    mockresp._json = MOCK_AUTH_RESPONSE
+    expected_params = {
+        "action": "requesttoken",
+        "client_id": "mock",
+        "client_secret": "mock",
+        "grant_type": "authorization_code",
+        "code": "mockcode",
+        "redirect_uri": withings_provider.REDIRECT_URI,
     }
+    url = f"{withings_provider.BASE_URL}/v2/oauth2"
 
-    with patch.object(auth_client._http, "request", return_value=mockresp):
+    with patch.object(auth_client, "_handle_http", return_value=mockresp) as mock_http:
         result = auth_client._get_access_token("mockcode")
 
-    assert result.userid == "30588767"
-    assert result.access_token == "mock_access_token"
-    assert result.refresh_token == "mock_refresh_token"
-    assert result.scope == "user.activity,user.metrics"
-    assert result.expiry > time.time()
-    assert result.token_type == "Bearer"
-
-
-def test_get_access_token_invalid_response(auth_client: _AuthClient) -> None:
-    mockresp = MagicMock(status_code=200, json=MagicMock())
-    mockresp.json.return_value = MagicMock(return_value={"status": 1})
-
-    with patch.object(auth_client._http, "request", return_value=mockresp):
-        with pytest.raises(ValueError):
-            auth_client._get_access_token("mockcode")
+    assert result.userid == MOCK_AUTH_RESPONSE["body"]["userid"]
+    mock_http.assert_called_once_with("POST", url, params=expected_params)
 
 
 def test_get_bearer_token_with_existing(auth_client: _AuthClient) -> None:
@@ -270,25 +268,22 @@ def test_get_headers(auth_client: _AuthClient) -> None:
 
 
 def test_refresh_access_token(auth_client: _AuthClient) -> None:
-    mock_post_resp = MagicMock(status_code=200, json=MagicMock())
-    mock_post_resp.json.return_value = MOCK_AUTH_RESPONSE
+    mockresp = HTTPResponse(MagicMock())
+    mockresp._json = MOCK_AUTH_RESPONSE
+    expected_params = {
+        "action": "requesttoken",
+        "client_id": "mock",
+        "client_secret": "mock",
+        "grant_type": "refresh_token",
+        "refresh_token": "mock_refresh_token",
+    }
+    url = f"{withings_provider.BASE_URL}/v2/oauth2"
 
-    with patch.object(auth_client._http, "request", return_value=mock_post_resp):
+    with patch.object(auth_client, "_handle_http", return_value=mockresp) as mock_http:
         result = auth_client._refresh_access_token(_AuthedUser(**MOCK_AUTH_USER))
 
     assert result.userid == MOCK_AUTH_USER["userid"]
-    assert result.access_token == MOCK_AUTH_USER["access_token"]
-
-
-def test_refresh_access_token_invalid_response(auth_client: _AuthClient) -> None:
-    mock_post_resp = MagicMock(
-        status_code=200,
-        json=MagicMock(return_value={"status": 1}),
-    )
-
-    with patch.object(auth_client._http, "request", return_value=mock_post_resp):
-        with pytest.raises(ValueError):
-            auth_client._refresh_access_token(_AuthedUser(**MOCK_AUTH_USER))
+    mock_http.assert_called_once_with("POST", url, params=expected_params)
 
 
 def test_create_signature(auth_client: _AuthClient) -> None:
@@ -298,45 +293,44 @@ def test_create_signature(auth_client: _AuthClient) -> None:
 
 
 def test_get_nonce(auth_client: _AuthClient) -> None:
-    mock_resp = MagicMock(
-        status_code=200,
-        json=MagicMock(
-            return_value={"status": 0, "body": {"nonce": "mock"}},
-        ),
-    )
+    mockresp = HTTPResponse(MagicMock())
+    mockresp._json = {"status": 0, "body": {"nonce": "mock"}}
+    set_timestamp = 12345
+    expected_params = {
+        "action": "getnonce",
+        "client_id": "mock",
+        "signature": auth_client.get_signature("getnonce", str(set_timestamp)),
+        "timestamp": str(set_timestamp),
+    }
+    url = f"{withings_provider.BASE_URL}/v2/signature"
 
-    with patch.object(auth_client._http, "request", return_value=mock_resp):
-        result = auth_client.get_nonce()
+    with patch("time.time", return_value=set_timestamp):
+        with patch.object(auth_client, "_handle_http", return_value=mockresp) as mock:
+            result = auth_client.get_nonce()
 
     assert result == "mock"
-
-
-def test_get_nonce_invalid_response(auth_client: _AuthClient) -> None:
-    mock_resp = MagicMock(status_code=200, json=MagicMock())
-    mock_resp._json = {"status": 503, "body": {"nonce": "mock"}}
-
-    with patch.object(auth_client._http, "request", return_value=mock_resp):
-        with pytest.raises(ValueError):
-            auth_client.get_nonce()
+    mock.assert_called_once_with("POST", url, params=expected_params)
 
 
 def test_revoke_access_token(auth_client: _AuthClient) -> None:
+    auth_client._authed_user = _AuthedUser(**MOCK_AUTH_USER)
     mock_resp = MagicMock(status_code=200, json=MagicMock())
     mock_resp.json.return_value = {"status": 0, "body": {}}
+    set_nonce = "mocknonce"
+    expected_params = {
+        "action": "revoke",
+        "client_id": "mock",
+        "nonce": set_nonce,
+        "signature": auth_client.get_signature("revoke", set_nonce),
+        "userid": "mockuserid",
+    }
+    url = f"{withings_provider.BASE_URL}/v2/oauth2"
 
-    with patch.object(auth_client._http, "request", return_value=mock_resp):
-        with patch.object(auth_client, "get_nonce", return_value="mocknonce"):
+    with patch.object(auth_client._http, "request", return_value=mock_resp) as mockhttp:
+        with patch.object(auth_client, "get_nonce", return_value=set_nonce):
             auth_client._revoke_access_token()
 
-
-def test_revoke_access_token_invalid_response(auth_client: _AuthClient) -> None:
-    mock_resp = MagicMock(status_code=200, json=MagicMock())
-    mock_resp.json.return_value = {"status": 1, "body": {}}
-
-    with patch.object(auth_client._http, "request", return_value=mock_resp):
-        with patch.object(auth_client, "get_nonce", return_value="mocknonce"):
-            with pytest.raises(ValueError):
-                auth_client._revoke_access_token()
+    mockhttp.assert_called_once_with("POST", url, params=expected_params)
 
 
 def test_auth_client_handle_http(auth_client: _AuthClient) -> None:
