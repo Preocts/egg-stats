@@ -21,8 +21,7 @@ SCOPES = "user.activity,user.metrics"
 REDIRECT_URI = "https://localhost:8080"
 
 AUTH_URL = "https://account.withings.com/oauth2_user/authorize2"
-ACCESS_URL = "https://wbsapi.withings.net/v2/oauth2"
-NONCE_URL = "https://wbsapi.withings.net/v2/signature"
+BASE_URL = "https://wbsapi.withings.net"
 VALID_RESP_CODES = [200, 302]
 VALID_STATUS_CODES = [0, 200, 204]
 
@@ -163,7 +162,7 @@ class _AuthClient:
             "code": code,
             "redirect_uri": REDIRECT_URI,
         }
-        resp = self._handle_http("POST", ACCESS_URL, params=params)
+        resp = self._handle_http("POST", f"{BASE_URL}/v2/oauth2", params=params)
         return _AuthedUser.from_dict(resp.json()["body"])
 
     def _refresh_access_token(self, authed_user: _AuthedUser) -> _AuthedUser:
@@ -176,7 +175,7 @@ class _AuthClient:
             "grant_type": "refresh_token",
             "refresh_token": authed_user.refresh_token,
         }
-        resp = self._handle_http("POST", ACCESS_URL, params=params)
+        resp = self._handle_http("POST", f"{BASE_URL}/v2/oauth2", params=params)
         return _AuthedUser.from_dict(resp.json()["body"])
 
     def _revoke_access_token(self) -> bool:
@@ -191,7 +190,7 @@ class _AuthClient:
             "signature": self.get_signature("revoke", nonce),
             "userid": userid,
         }
-        self._handle_http("POST", ACCESS_URL, params=params)
+        self._handle_http("POST", f"{BASE_URL}/v2/oauth2", params=params)
         return True
 
     def get_nonce(self) -> str:
@@ -204,7 +203,7 @@ class _AuthClient:
             "signature": self.get_signature("getnonce", timestamp),
             "timestamp": timestamp,
         }
-        resp = self._handle_http("POST", NONCE_URL, params=params)
+        resp = self._handle_http("POST", f"{BASE_URL}/v2/signature", params=params)
         return resp.json()["body"]["nonce"]
 
     def get_signature(self, action: str, unique: str) -> str:
