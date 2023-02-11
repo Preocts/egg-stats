@@ -1,7 +1,9 @@
+"""Connect to and interact with the Withings API."""
 from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -19,8 +21,7 @@ SCOPES = "user.activity,user.metrics"
 REDIRECT_URI = "https://localhost:8080"
 
 AUTH_URL = "https://account.withings.com/oauth2_user/authorize2"
-ACCESS_URL = "https://wbsapi.withings.net/v2/oauth2"
-NONCE_URL = "https://wbsapi.withings.net/v2/signature"
+BASE_URL = "https://wbsapi.withings.net"
 VALID_RESP_CODES = [200, 302]
 VALID_STATUS_CODES = [0, 200, 204]
 
@@ -36,9 +37,8 @@ class HTTPResponse:
         self.text = response.text
         self.status_code = response.status_code
         self.url = str(response.url)
-        self.is_success = (
-            self.status_code in VALID_RESP_CODES
-            and self._json.get("status") in VALID_STATUS_CODES
+        self.is_success = self.status_code in VALID_RESP_CODES and (
+            self._json.get("status") in VALID_STATUS_CODES or not self._json
         )
 
     def json(self) -> dict[str, Any]:
@@ -56,6 +56,83 @@ class _AuthedUser:
     token_type: str
     csrf_token: str | None = None
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> _AuthedUser:
+        """Create an instance from a dictionary."""
+        return cls(
+            userid=data["userid"],
+            access_token=data["access_token"],
+            refresh_token=data["refresh_token"],
+            expiry=time.time() + data["expires_in"] - EXPIRY_BUFFER,
+            scope=data["scope"],
+            token_type=data["token_type"],
+            csrf_token=data.get("csrf_token"),
+        )
+
+
+class WithingsProvider:
+    """Representation for the Withings API."""
+
+    logger = logging.getLogger(__name__)
+
+    def __init__(
+        self,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+    ) -> None:
+        """Initialize the Withings API."""
+        self._http = httpx.Client(timeout=TIMEOUT)
+        self._auth_client = _AuthClient(client_id, client_secret, self._http)
+
+    def ecg_list(self, number_of_days: int = 180) -> list[dict[str, Any]]:
+        """
+        Return a list of ECG records and Afib for a given period of time.
+
+        Args:
+            number_of_days: The number of days to get data for. Defaults to 180.
+
+        Returns:
+            A list of ECG records and Afib for a given period of time.
+
+        Raises:
+            ValueError: If the request fails.
+        """
+        self.logger.debug("Getting heart list for %s days", number_of_days)
+        params = {
+            "action": "list",
+            "start_date": int(time.time()) - number_of_days * 24 * 60 * 60,
+            "end_date": int(time.time()),
+        }
+        url = f"{BASE_URL}/v2/heart"
+        more = True
+        records: list[dict[str, Any]] = []
+        while more:
+            resp = self._handle_http("POST", url, params)
+
+            records.extend(resp.json()["body"].get("series", []))
+            more = resp.json()["body"].get("more", False)
+            params["offset"] = resp.json()["body"].get("offset", 0)
+
+            self.logger.debug("Discovered %s records (more: %s)", len(records), more)
+
+        return records
+
+    def _handle_http(self, verb: str, url: str, params: dict[str, Any]) -> HTTPResponse:
+        """Handle HTTPS request, raise ValueError on failure."""
+        headers = self._auth_client.get_headers()
+        resp = HTTPResponse(
+            self._http.request(
+                verb.upper(),
+                url,
+                params=params,
+                headers=headers,
+            )
+        )
+        if not resp.is_success:
+            raise ValueError(f"Failed {verb.upper()} to {url}: {resp.text}")
+
+        return resp
+
 
 class _AuthClient:
     """Auth client with client secret is available."""
@@ -66,6 +143,7 @@ class _AuthClient:
         self,
         client_id: str | None = None,
         client_secret: str | None = None,
+        http: httpx.Client | None = None,
     ) -> None:
         """
         Representation for the client that interacts with the API.
@@ -86,8 +164,8 @@ class _AuthClient:
         """
         self.client_id = client_id or os.environ.get("EGGSTATS_CLIENT_ID")
         self.client_secret = client_secret or os.environ.get("EGGSTATS_CLIENT_SECRET")
+        self._http = http or httpx.Client(timeout=TIMEOUT)
         self._authed_user: _AuthedUser | None = None
-        self._http = httpx.Client(timeout=TIMEOUT)
 
         if not self.client_id or not self.client_secret:
             raise ValueError("client_id and client_secret are required.")
@@ -122,16 +200,17 @@ class _AuthClient:
             "redirect_uri": REDIRECT_URI,
         }
 
-        resp = HTTPResponse(self._http.get(AUTH_URL, params=params))
+        resp = self._handle_http("GET", AUTH_URL, params=params)
 
-        if resp.status_code not in VALID_RESP_CODES:
-            raise ValueError(f"Failed to get auth code: {resp.text}")
-
+        # User needs to authorize the app
+        self.logger.debug("User needs to authorize the app...")
         response_url = self._get_response_url(resp.url)
         code, state = self._split_response(response_url)
 
         if code_challenge != state:
-            raise ValueError("Code challenge does not match state.")
+            raise ValueError(
+                f"Challenge ({code_challenge}) does not match state ({state})."
+            )
 
         return code
 
@@ -146,20 +225,8 @@ class _AuthClient:
             "code": code,
             "redirect_uri": REDIRECT_URI,
         }
-        resp = HTTPResponse(self._http.post(ACCESS_URL, params=params))
-
-        if not resp.is_success:
-            raise ValueError(f"Failed to get access token: {resp.text}")
-
-        return _AuthedUser(
-            userid=resp.json()["body"]["userid"],
-            access_token=resp.json()["body"]["access_token"],
-            refresh_token=resp.json()["body"]["refresh_token"],
-            expiry=time.time() + resp.json()["body"]["expires_in"] - EXPIRY_BUFFER,
-            scope=resp.json()["body"]["scope"],
-            token_type=resp.json()["body"]["token_type"],
-            csrf_token=resp.json()["body"].get("csrf_token"),
-        )
+        resp = self._handle_http("POST", f"{BASE_URL}/v2/oauth2", params=params)
+        return _AuthedUser.from_dict(resp.json()["body"])
 
     def _refresh_access_token(self, authed_user: _AuthedUser) -> _AuthedUser:
         """Refresh the access token."""
@@ -171,63 +238,50 @@ class _AuthClient:
             "grant_type": "refresh_token",
             "refresh_token": authed_user.refresh_token,
         }
-        resp = HTTPResponse(self._http.post(ACCESS_URL, params=params))
+        resp = self._handle_http("POST", f"{BASE_URL}/v2/oauth2", params=params)
+        return _AuthedUser.from_dict(resp.json()["body"])
 
-        if not resp.is_success:
-            raise ValueError(f"Failed to refresh access token: {resp.text}")
-
-        return _AuthedUser(
-            userid=resp.json()["body"]["userid"],
-            access_token=resp.json()["body"]["access_token"],
-            refresh_token=resp.json()["body"]["refresh_token"],
-            expiry=time.time() + resp.json()["body"]["expires_in"] - EXPIRY_BUFFER,
-            scope=resp.json()["body"]["scope"],
-            token_type=resp.json()["body"]["token_type"],
-            csrf_token=resp.json()["body"].get("csrf_token"),
-        )
-
-    def _revoke_access_token(self) -> None:
+    def _revoke_access_token(self) -> bool:
         """Revoke the access token."""
         userid = self._authed_user.userid if self._authed_user else ""
         self.logger.debug("Revoking access token for user %s", userid)
-        nonce = self._get_nonce()
+        nonce = self.get_nonce()
         params = {
             "action": "revoke",
             "client_id": self.client_id,
             "nonce": nonce,
-            "signature": self._create_signature("revoke", nonce),
+            "signature": self.get_signature("revoke", nonce),
             "userid": userid,
         }
+        self._handle_http("POST", f"{BASE_URL}/v2/oauth2", params=params)
+        return True
 
-        resp = HTTPResponse(self._http.post(ACCESS_URL, params=params))
-
-        if not resp.is_success:
-            raise ValueError(f"Failed to revoke access token: {resp.text}")
-
-    def _get_nonce(self) -> str:
+    def get_nonce(self) -> str:
         """Get a nonce."""
         self.logger.debug("Getting nonce for client_id %s", self.client_id)
         timestamp = str(int(time.time()))
         params = {
             "action": "getnonce",
             "client_id": self.client_id,
-            "signature": self._create_signature("getnonce", timestamp),
+            "signature": self.get_signature("getnonce", timestamp),
             "timestamp": timestamp,
         }
-        resp = HTTPResponse(self._http.post(NONCE_URL, params=params))
-
-        if not resp.is_success:
-            raise ValueError(f"Failed to get nonce: {resp.text}")
-
+        resp = self._handle_http("POST", f"{BASE_URL}/v2/signature", params=params)
         return resp.json()["body"]["nonce"]
 
-    def _create_signature(self, action: str, timestamp: str) -> str:
-        """Create the signature for a nonce request."""
-        import hmac
-
-        hash_string = f"{action},{self.client_id},{timestamp}".encode()
+    def get_signature(self, action: str, unique: str) -> str:
+        """Create a signature for action using a unique timestamp or nonce."""
+        hash_string = f"{action},{self.client_id},{unique}".encode()
         secret = self.client_secret or ""
         return hmac.digest(secret.encode("utf-8"), hash_string, hashlib.sha256).hex()
+
+    def _handle_http(self, verb: str, url: str, params: dict[str, Any]) -> HTTPResponse:
+        """Handle HTTPS request, raise ValueError on failure."""
+        resp = HTTPResponse(self._http.request(verb.upper(), url, params=params))
+        if not resp.is_success:
+            raise ValueError(f"Failed {verb.upper()} to {url}: {resp.text}")
+
+        return resp
 
     @staticmethod
     def _get_response_url(url: str) -> str:
@@ -258,3 +312,18 @@ class _AuthClient:
         code_byte = hashlib.sha256(code_verifier.encode("utf-8")).digest()
         code_challenge = base64.urlsafe_b64encode(code_byte).decode("utf-8")
         return code_challenge.replace("=", "")
+
+
+if __name__ == "__main__":
+    from secretbox import SecretBox
+
+    logging.basicConfig(level=logging.DEBUG)
+    SecretBox(auto_load=True)
+
+    withings = WithingsProvider()
+
+    print(json.dumps(withings._auth_client.get_headers(), indent=4))
+
+    heart = withings.ecg_list(180)
+    with open("heart.json", "w") as file:
+        json.dump(heart, file, indent=4)
