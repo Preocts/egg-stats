@@ -48,7 +48,7 @@ def mock_env() -> Generator[None, None, None]:
 
 @pytest.fixture
 def auth_client() -> _AuthClient:
-    return _AuthClient("mock", "mock")
+    return _AuthClient("mock", "mock", MagicMock())
 
 
 def test_HTTPResponse_handles_empty_json() -> None:

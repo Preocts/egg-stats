@@ -80,6 +80,7 @@ class _AuthClient:
         self,
         client_id: str | None = None,
         client_secret: str | None = None,
+        http: httpx.Client | None = None,
     ) -> None:
         """
         Representation for the client that interacts with the API.
@@ -100,8 +101,8 @@ class _AuthClient:
         """
         self.client_id = client_id or os.environ.get("EGGSTATS_CLIENT_ID")
         self.client_secret = client_secret or os.environ.get("EGGSTATS_CLIENT_SECRET")
+        self._http = http or httpx.Client(timeout=TIMEOUT)
         self._authed_user: _AuthedUser | None = None
-        self._http = httpx.Client(timeout=TIMEOUT)
 
         if not self.client_id or not self.client_secret:
             raise ValueError("client_id and client_secret are required.")
