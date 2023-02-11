@@ -12,6 +12,7 @@ import pytest
 from egg_stats.withings_provider import _AuthClient
 from egg_stats.withings_provider import _AuthedUser
 from egg_stats.withings_provider import HTTPResponse
+from egg_stats.withings_provider import WithingsProvider
 
 MOCK_AUTH_USER: Any = {
     "userid": "mockuserid",
@@ -49,6 +50,13 @@ def mock_env() -> Generator[None, None, None]:
 @pytest.fixture
 def auth_client() -> _AuthClient:
     return _AuthClient("mock", "mock", MagicMock())
+
+
+@pytest.fixture
+def provider(auth_client: _AuthClient) -> WithingsProvider:
+    withing_provider = WithingsProvider("mock", "mock")
+    withing_provider._auth_client = auth_client
+    return withing_provider
 
 
 def test_HTTPResponse_handles_empty_json() -> None:
@@ -327,3 +335,52 @@ def test_revoke_access_token_invalid_response(auth_client: _AuthClient) -> None:
         with patch.object(auth_client, "get_nonce", return_value="mocknonce"):
             with pytest.raises(ValueError):
                 auth_client._revoke_access_token()
+
+
+def test_withings_provider_handle_http(provider: WithingsProvider) -> None:
+    mock_headers = {"Authorization": "Bearer mocktoken"}
+    mock_resp = MagicMock(status_code=200, json=MagicMock())
+    mock_resp.json.return_value = {"status": 0, "body": {"mock": "body"}}
+    url = "https://mockurl.com"
+    params = {"mock": "params"}
+    verb = "GET"
+
+    with patch.object(provider._auth_client, "get_headers", return_value=mock_headers):
+        with patch.object(provider._http, "request", return_value=mock_resp) as mock:
+            resp = provider._handle_http(verb, url, params)
+
+    mock.assert_called_once_with(verb, url, headers=mock_headers, params=params)
+    assert resp.is_success is True
+    assert resp.json() == {"status": 0, "body": {"mock": "body"}}
+
+
+def test_withings_provider_handle_http_failure(provider: WithingsProvider) -> None:
+    mock_resp = MagicMock(status_code=200, json=MagicMock())
+    mock_resp.json.return_value = {"status": 1, "body": {"mock": "body"}}
+
+    with patch.object(provider._auth_client, "get_headers", return_value={}):
+        with patch.object(provider._http, "request", return_value=mock_resp):
+            with pytest.raises(ValueError, match="^Failed"):
+                provider._handle_http("GET", "mock", {})
+
+
+def test_withings_provider_heart_list_with_more(provider: WithingsProvider) -> None:
+    side_effect = [
+        MagicMock(status_code=200, json=MagicMock()),
+        MagicMock(status_code=200, json=MagicMock()),
+    ]
+    side_effect[0].json.return_value = {
+        "status": 0,
+        "body": {"more": True, "offset": 1, "series": [1]},
+    }
+    side_effect[1].json.return_value = {
+        "status": 0,
+        "body": {"more": False, "offset": 2, "series": [2]},
+    }
+    expected = [1, 2]
+
+    with patch.object(provider, "_handle_http", side_effect=side_effect) as mock_http:
+        result = provider.ecg_list(12)
+
+    assert result == expected
+    assert mock_http.call_count == 2

@@ -70,6 +70,70 @@ class _AuthedUser:
         )
 
 
+class WithingsProvider:
+    """Representation for the Withings API."""
+
+    logger = logging.getLogger(__name__)
+
+    def __init__(
+        self,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+    ) -> None:
+        """Initialize the Withings API."""
+        self._http = httpx.Client(timeout=TIMEOUT)
+        self._auth_client = _AuthClient(client_id, client_secret, self._http)
+
+    def ecg_list(self, number_of_days: int = 180) -> list[dict[str, Any]]:
+        """
+        Return a list of ECG records and Afib for a given period of time.
+
+        Args:
+            number_of_days: The number of days to get data for. Defaults to 180.
+
+        Returns:
+            A list of ECG records and Afib for a given period of time.
+
+        Raises:
+            ValueError: If the request fails.
+        """
+        self.logger.debug("Getting heart list for %s days", number_of_days)
+        params = {
+            "action": "list",
+            "start_date": int(time.time()) - number_of_days * 24 * 60 * 60,
+            "end_date": int(time.time()),
+        }
+        url = f"{BASE_URL}/v2/heart"
+        more = True
+        records: list[dict[str, Any]] = []
+        while more:
+            resp = self._handle_http("POST", url, params)
+
+            records.extend(resp.json()["body"].get("series", []))
+            more = resp.json()["body"].get("more", False)
+            params["offset"] = resp.json()["body"].get("offset", 0)
+
+            self.logger.debug("Discovered %s records (more: %s)", len(records), more)
+
+        return records
+
+    def _handle_http(self, verb: str, url: str, params: dict[str, Any]) -> HTTPResponse:
+        """Handle HTTPS request, raise ValueError on failure."""
+        headers = self._auth_client.get_headers()
+        resp = HTTPResponse(
+            self._http.request(
+                verb.upper(),
+                url,
+                params=params,
+                headers=headers,
+            )
+        )
+        if not resp.is_success:
+            raise ValueError(f"Failed {verb.upper()} to {url}: {resp.text}")
+
+        return resp
+
+
 class _AuthClient:
     """Auth client with client secret is available."""
 
@@ -248,3 +312,18 @@ class _AuthClient:
         code_byte = hashlib.sha256(code_verifier.encode("utf-8")).digest()
         code_challenge = base64.urlsafe_b64encode(code_byte).decode("utf-8")
         return code_challenge.replace("=", "")
+
+
+if __name__ == "__main__":
+    from secretbox import SecretBox
+
+    logging.basicConfig(level=logging.DEBUG)
+    SecretBox(auto_load=True)
+
+    withings = WithingsProvider()
+
+    print(json.dumps(withings._auth_client.get_headers(), indent=4))
+
+    heart = withings.ecg_list(180)
+    with open("heart.json", "w") as file:
+        json.dump(heart, file, indent=4)
