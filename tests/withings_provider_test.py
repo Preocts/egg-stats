@@ -339,6 +339,31 @@ def test_revoke_access_token_invalid_response(auth_client: _AuthClient) -> None:
                 auth_client._revoke_access_token()
 
 
+def test_auth_client_handle_http(auth_client: _AuthClient) -> None:
+    mock_resp = MagicMock(status_code=200, json=MagicMock())
+    mock_resp.json.return_value = {"status": 0, "body": {"mock": "body"}}
+    url = "https://mockurl.com"
+    params = {"mock": "params"}
+    verb = "GET"
+
+    with patch.object(auth_client._http, "request", return_value=mock_resp) as mock:
+        resp = auth_client._handle_http(verb, url, params)
+
+    mock.assert_called_once_with(verb, url, params=params)
+    assert resp.is_success is True
+    assert resp.json() == {"status": 0, "body": {"mock": "body"}}
+
+
+def test_auth_client_handle_http_failure(auth_client: _AuthClient) -> None:
+    mock_resp = MagicMock(status_code=200, json=MagicMock())
+    mock_resp.json.return_value = {"status": 1, "body": {"mock": "body"}}
+
+    with patch.object(auth_client, "get_headers", return_value={}):
+        with patch.object(auth_client._http, "request", return_value=mock_resp):
+            with pytest.raises(ValueError, match="^Failed"):
+                auth_client._handle_http("GET", "mock", {})
+
+
 def test_withings_provider_handle_http(provider: WithingsProvider) -> None:
     mock_headers = {"Authorization": "Bearer mocktoken"}
     mock_resp = MagicMock(status_code=200, json=MagicMock())
