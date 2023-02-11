@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -182,35 +183,33 @@ class _AuthClient:
         """Revoke the access token."""
         userid = self._authed_user.userid if self._authed_user else ""
         self.logger.debug("Revoking access token for user %s", userid)
-        nonce = self._get_nonce()
+        nonce = self.get_nonce()
         params = {
             "action": "revoke",
             "client_id": self.client_id,
             "nonce": nonce,
-            "signature": self._create_signature("revoke", nonce),
+            "signature": self.get_signature("revoke", nonce),
             "userid": userid,
         }
         self._handle_http("POST", ACCESS_URL, params=params)
         return True
 
-    def _get_nonce(self) -> str:
+    def get_nonce(self) -> str:
         """Get a nonce."""
         self.logger.debug("Getting nonce for client_id %s", self.client_id)
         timestamp = str(int(time.time()))
         params = {
             "action": "getnonce",
             "client_id": self.client_id,
-            "signature": self._create_signature("getnonce", timestamp),
+            "signature": self.get_signature("getnonce", timestamp),
             "timestamp": timestamp,
         }
         resp = self._handle_http("POST", NONCE_URL, params=params)
         return resp.json()["body"]["nonce"]
 
-    def _create_signature(self, action: str, timestamp: str) -> str:
-        """Create the signature for a nonce request."""
-        import hmac
-
-        hash_string = f"{action},{self.client_id},{timestamp}".encode()
+    def get_signature(self, action: str, unique: str) -> str:
+        """Create a signature for action using a unique timestamp or nonce."""
+        hash_string = f"{action},{self.client_id},{unique}".encode()
         secret = self.client_secret or ""
         return hmac.digest(secret.encode("utf-8"), hash_string, hashlib.sha256).hex()
 

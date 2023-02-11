@@ -282,7 +282,7 @@ def test_refresh_access_token_invalid_response(auth_client: _AuthClient) -> None
 
 
 def test_create_signature(auth_client: _AuthClient) -> None:
-    result = auth_client._create_signature("mockdata", "12345")
+    result = auth_client.get_signature("mockdata", "12345")
     # This is the expected result of the above data and timestamp
     assert result == "8b3db37b7c80908b944b7fc5164c42b235da89772cf56c745a734bf74dac287a"
 
@@ -296,7 +296,7 @@ def test_get_nonce(auth_client: _AuthClient) -> None:
     )
 
     with patch.object(auth_client._http, "request", return_value=mock_resp):
-        result = auth_client._get_nonce()
+        result = auth_client.get_nonce()
 
     assert result == "mock"
 
@@ -307,7 +307,7 @@ def test_get_nonce_invalid_response(auth_client: _AuthClient) -> None:
 
     with patch.object(auth_client._http, "request", return_value=mock_resp):
         with pytest.raises(ValueError):
-            auth_client._get_nonce()
+            auth_client.get_nonce()
 
 
 def test_revoke_access_token(auth_client: _AuthClient) -> None:
@@ -315,7 +315,7 @@ def test_revoke_access_token(auth_client: _AuthClient) -> None:
     mock_resp.json.return_value = {"status": 0, "body": {}}
 
     with patch.object(auth_client._http, "request", return_value=mock_resp):
-        with patch.object(auth_client, "_get_nonce", return_value="mocknonce"):
+        with patch.object(auth_client, "get_nonce", return_value="mocknonce"):
             auth_client._revoke_access_token()
 
 
@@ -324,6 +324,6 @@ def test_revoke_access_token_invalid_response(auth_client: _AuthClient) -> None:
     mock_resp.json.return_value = {"status": 1, "body": {}}
 
     with patch.object(auth_client._http, "request", return_value=mock_resp):
-        with patch.object(auth_client, "_get_nonce", return_value="mocknonce"):
+        with patch.object(auth_client, "get_nonce", return_value="mocknonce"):
             with pytest.raises(ValueError):
                 auth_client._revoke_access_token()
