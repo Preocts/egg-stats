@@ -123,16 +123,17 @@ class _AuthClient:
             "redirect_uri": REDIRECT_URI,
         }
 
-        resp = HTTPResponse(self._http.get(AUTH_URL, params=params))
+        resp = self._handle_http("GET", AUTH_URL, params=params)
 
-        if resp.status_code not in VALID_RESP_CODES:
-            raise ValueError(f"Failed to get auth code: {resp.text}")
-
+        # User needs to authorize the app
+        self.logger.debug("User needs to authorize the app...")
         response_url = self._get_response_url(resp.url)
         code, state = self._split_response(response_url)
 
         if code_challenge != state:
-            raise ValueError("Code challenge does not match state.")
+            raise ValueError(
+                f"Challenge ({code_challenge}) does not match state ({state})."
+            )
 
         return code
 
@@ -147,10 +148,7 @@ class _AuthClient:
             "code": code,
             "redirect_uri": REDIRECT_URI,
         }
-        resp = HTTPResponse(self._http.post(ACCESS_URL, params=params))
-
-        if not resp.is_success:
-            raise ValueError(f"Failed to get access token: {resp.text}")
+        resp = self._handle_http("POST", ACCESS_URL, params=params)
 
         return _AuthedUser(
             userid=resp.json()["body"]["userid"],
@@ -172,10 +170,7 @@ class _AuthClient:
             "grant_type": "refresh_token",
             "refresh_token": authed_user.refresh_token,
         }
-        resp = HTTPResponse(self._http.post(ACCESS_URL, params=params))
-
-        if not resp.is_success:
-            raise ValueError(f"Failed to refresh access token: {resp.text}")
+        resp = self._handle_http("POST", ACCESS_URL, params=params)
 
         return _AuthedUser(
             userid=resp.json()["body"]["userid"],
@@ -187,7 +182,7 @@ class _AuthClient:
             csrf_token=resp.json()["body"].get("csrf_token"),
         )
 
-    def _revoke_access_token(self) -> None:
+    def _revoke_access_token(self) -> bool:
         """Revoke the access token."""
         userid = self._authed_user.userid if self._authed_user else ""
         self.logger.debug("Revoking access token for user %s", userid)
@@ -199,11 +194,8 @@ class _AuthClient:
             "signature": self._create_signature("revoke", nonce),
             "userid": userid,
         }
-
-        resp = HTTPResponse(self._http.post(ACCESS_URL, params=params))
-
-        if not resp.is_success:
-            raise ValueError(f"Failed to revoke access token: {resp.text}")
+        self._handle_http("POST", ACCESS_URL, params=params)
+        return True
 
     def _get_nonce(self) -> str:
         """Get a nonce."""
@@ -215,11 +207,7 @@ class _AuthClient:
             "signature": self._create_signature("getnonce", timestamp),
             "timestamp": timestamp,
         }
-        resp = HTTPResponse(self._http.post(NONCE_URL, params=params))
-
-        if not resp.is_success:
-            raise ValueError(f"Failed to get nonce: {resp.text}")
-
+        resp = self._handle_http("POST", NONCE_URL, params=params)
         return resp.json()["body"]["nonce"]
 
     def _create_signature(self, action: str, timestamp: str) -> str:
@@ -229,6 +217,14 @@ class _AuthClient:
         hash_string = f"{action},{self.client_id},{timestamp}".encode()
         secret = self.client_secret or ""
         return hmac.digest(secret.encode("utf-8"), hash_string, hashlib.sha256).hex()
+
+    def _handle_http(self, verb: str, url: str, params: dict[str, Any]) -> HTTPResponse:
+        """Handle HTTPS request, raise ValueError on failure."""
+        resp = HTTPResponse(self._http.request(verb.upper(), url, params=params))
+        if not resp.is_success:
+            raise ValueError(f"Failed {verb.upper()} to {url}: {resp.text}")
+
+        return resp
 
     @staticmethod
     def _get_response_url(url: str) -> str:
