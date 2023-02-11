@@ -9,10 +9,12 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+from egg_stats import withings_provider
 from egg_stats.withings_provider import _AuthClient
 from egg_stats.withings_provider import _AuthedUser
 from egg_stats.withings_provider import HTTPResponse
 from egg_stats.withings_provider import WithingsProvider
+
 
 MOCK_AUTH_USER: Any = {
     "userid": "mockuserid",
@@ -364,7 +366,51 @@ def test_withings_provider_handle_http_failure(provider: WithingsProvider) -> No
                 provider._handle_http("GET", "mock", {})
 
 
-def test_withings_provider_heart_list_with_more(provider: WithingsProvider) -> None:
+def test_withings_provider_ecg_list(provider: WithingsProvider) -> None:
+    resp = [{"mock": "resp"}]
+    url = f"{withings_provider.BASE_URL}/v2/heart"
+    days = 12
+    timetime = 1234567890
+    timeoffset = timetime - (days * 24 * 60 * 60)
+    params = {
+        "action": "list",
+        "start_date": timeoffset,
+        "end_date": timetime,
+    }
+
+    # patch time to be consistent for the test
+    with patch("time.time", return_value=timetime):
+        with patch.object(
+            provider, "_handle_paginated", return_value=resp
+        ) as mock_http:
+            result = provider.ecg_list(days)
+
+    assert result == resp
+    mock_http.assert_called_once_with("series", "POST", url, params)
+
+
+def test_withings_provider_activity_list(provider: WithingsProvider) -> None:
+    # NOTE: This will fail if run between 23:59:59 and 00:00:00
+    resp = [{"mock": "resp"}]
+    url = f"{withings_provider.BASE_URL}/v2/measure"
+    days = 12
+    starttime = int(time.time()) - (days * 24 * 60 * 60)
+
+    params = {
+        "action": "getactivity",
+        "startdateymd": time.strftime("%Y-%m-%d", time.localtime(starttime)),
+        "enddateymd": time.strftime("%Y-%m-%d", time.localtime()),
+        "data_fields": ",".join(withings_provider.DATA_FIELDS),
+    }
+
+    with patch.object(provider, "_handle_paginated", return_value=resp) as mock_http:
+        result = provider.activity_list(days)
+
+    assert result == resp
+    mock_http.assert_called_once_with("activities", "POST", url, params)
+
+
+def test_withings_provider_handle_paginated(provider: WithingsProvider) -> None:
     side_effect = [
         MagicMock(status_code=200, json=MagicMock()),
         MagicMock(status_code=200, json=MagicMock()),
@@ -380,7 +426,12 @@ def test_withings_provider_heart_list_with_more(provider: WithingsProvider) -> N
     expected = [1, 2]
 
     with patch.object(provider, "_handle_http", side_effect=side_effect) as mock_http:
-        result = provider.ecg_list(12)
+        result = provider._handle_paginated(
+            label="series",
+            verb="POST",
+            url="mockurl",
+            params={"mock": "params"},
+        )
 
     assert result == expected
     assert mock_http.call_count == 2

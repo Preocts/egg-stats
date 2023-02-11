@@ -24,7 +24,6 @@ AUTH_URL = "https://account.withings.com/oauth2_user/authorize2"
 BASE_URL = "https://wbsapi.withings.net"
 VALID_RESP_CODES = [200, 302]
 VALID_STATUS_CODES = [0, 200, 204]
-BEARER_DEBUG = ""
 
 DATA_FIELDS = [
     "steps",
@@ -123,20 +122,9 @@ class WithingsProvider:
             "end_date": int(time.time()),
         }
         url = f"{BASE_URL}/v2/heart"
-        more = True
-        records: list[dict[str, Any]] = []
-        while more:
-            resp = self._handle_http("POST", url, params)
+        return self._handle_paginated("series", "POST", url, params)
 
-            records.extend(resp.json()["body"].get("series", []))
-            more = resp.json()["body"].get("more", False)
-            params["offset"] = resp.json()["body"].get("offset", 0)
-
-            self.logger.debug("Discovered %s records (more: %s)", len(records), more)
-
-        return records
-
-    def activity_range(self, number_of_days: int = 7) -> list[dict[str, Any]]:
+    def activity_list(self, number_of_days: int = 7) -> list[dict[str, Any]]:
         """Get aggregated activity data for a given period of time."""
         self.logger.debug("Getting activity range for %s days", number_of_days)
         starttime = int(time.time()) - number_of_days * 24 * 60 * 60
@@ -149,16 +137,28 @@ class WithingsProvider:
             "data_fields": ",".join(DATA_FIELDS),
         }
         url = f"{BASE_URL}/v2/measure"
+        return self._handle_paginated("activities", "POST", url, params)
+
+    def _handle_paginated(
+        self,
+        label: str,
+        verb: str,
+        url: str,
+        params: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Handle paginated API calls."""
         more = True
         records: list[dict[str, Any]] = []
         while more:
-            resp = self._handle_http("POST", url, params)
+            resp = self._handle_http(verb, url, params)
 
-            records.extend(resp.json()["body"].get("activities", []))
+            records.extend(resp.json()["body"].get(label, []))
             more = resp.json()["body"].get("more", False)
             params["offset"] = resp.json()["body"].get("offset", 0)
 
-            self.logger.debug("Discovered %s records (more: %s)", len(records), more)
+            self.logger.debug(
+                "Discovered %s %s records (more: %s)", len(records), label, more
+            )
 
         return records
 
@@ -357,18 +357,3 @@ class _AuthClient:
         code_byte = hashlib.sha256(code_verifier.encode("utf-8")).digest()
         code_challenge = base64.urlsafe_b64encode(code_byte).decode("utf-8")
         return code_challenge.replace("=", "")
-
-
-if __name__ == "__main__":
-    from secretbox import SecretBox
-
-    logging.basicConfig(level=logging.DEBUG)
-    SecretBox(auto_load=True)
-
-    withings = WithingsProvider()
-
-    print(json.dumps(withings._auth_client.get_headers(), indent=4))
-
-    heart = withings.ecg_list(180)
-    with open("heart.json", "w") as file:
-        json.dump(heart, file, indent=4)
