@@ -57,6 +57,19 @@ class _AuthedUser:
     token_type: str
     csrf_token: str | None = None
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> _AuthedUser:
+        """Create an instance from a dictionary."""
+        return cls(
+            userid=data["userid"],
+            access_token=data["access_token"],
+            refresh_token=data["refresh_token"],
+            expiry=time.time() + data["expires_in"] - EXPIRY_BUFFER,
+            scope=data["scope"],
+            token_type=data["token_type"],
+            csrf_token=data.get("csrf_token"),
+        )
+
 
 class _AuthClient:
     """Auth client with client secret is available."""
@@ -149,16 +162,7 @@ class _AuthClient:
             "redirect_uri": REDIRECT_URI,
         }
         resp = self._handle_http("POST", ACCESS_URL, params=params)
-
-        return _AuthedUser(
-            userid=resp.json()["body"]["userid"],
-            access_token=resp.json()["body"]["access_token"],
-            refresh_token=resp.json()["body"]["refresh_token"],
-            expiry=time.time() + resp.json()["body"]["expires_in"] - EXPIRY_BUFFER,
-            scope=resp.json()["body"]["scope"],
-            token_type=resp.json()["body"]["token_type"],
-            csrf_token=resp.json()["body"].get("csrf_token"),
-        )
+        return _AuthedUser.from_dict(resp.json()["body"])
 
     def _refresh_access_token(self, authed_user: _AuthedUser) -> _AuthedUser:
         """Refresh the access token."""
@@ -171,16 +175,7 @@ class _AuthClient:
             "refresh_token": authed_user.refresh_token,
         }
         resp = self._handle_http("POST", ACCESS_URL, params=params)
-
-        return _AuthedUser(
-            userid=resp.json()["body"]["userid"],
-            access_token=resp.json()["body"]["access_token"],
-            refresh_token=resp.json()["body"]["refresh_token"],
-            expiry=time.time() + resp.json()["body"]["expires_in"] - EXPIRY_BUFFER,
-            scope=resp.json()["body"]["scope"],
-            token_type=resp.json()["body"]["token_type"],
-            csrf_token=resp.json()["body"].get("csrf_token"),
-        )
+        return _AuthedUser.from_dict(resp.json()["body"])
 
     def _revoke_access_token(self) -> bool:
         """Revoke the access token."""
