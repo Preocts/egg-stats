@@ -37,9 +37,8 @@ class HTTPResponse:
         self.text = response.text
         self.status_code = response.status_code
         self.url = str(response.url)
-        self.is_success = (
-            self.status_code in VALID_RESP_CODES
-            and self._json.get("status") in VALID_STATUS_CODES
+        self.is_success = self.status_code in VALID_RESP_CODES and (
+            self._json.get("status") in VALID_STATUS_CODES or not self._json
         )
 
     def json(self) -> dict[str, Any]:
