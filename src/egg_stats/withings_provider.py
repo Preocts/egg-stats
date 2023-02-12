@@ -65,6 +65,12 @@ class HTTPResponse:
 
 
 @dataclass
+class AuthedUser:
+    userid: str
+    refresh_token: str
+
+
+@dataclass
 class _AuthedUser:
     userid: str
     access_token: str
@@ -101,6 +107,17 @@ class WithingsProvider:
         """Initialize the Withings API."""
         self._http = httpx.Client(timeout=TIMEOUT)
         self._auth_client = _AuthClient(client_id, client_secret, self._http)
+
+    @property
+    def user(self) -> AuthedUser:
+        """Return the authenticated user."""
+        if not self._auth_client._authed_user:
+            raise ValueError("Not authenticated, call authenticate() first.")
+
+        return AuthedUser(
+            userid=self._auth_client._authed_user.userid,
+            refresh_token=self._auth_client._authed_user.refresh_token,
+        )
 
     def activity_list(self, number_of_days: int = 7) -> list[dict[str, Any]]:
         """Get aggregated activity data for a given period of time."""

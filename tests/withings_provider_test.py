@@ -431,3 +431,20 @@ def test_withings_provider_handle_paginated(provider: WithingsProvider) -> None:
 
     assert result == expected
     assert mock_http.call_count == 2
+
+
+def test_withings_provider_user(provider: WithingsProvider) -> None:
+    mock_user = _AuthedUser.from_dict(MOCK_AUTH_RESPONSE["body"])
+    provider._auth_client._authed_user = mock_user
+
+    user = provider.user
+
+    assert user.userid == mock_user.userid
+    assert user.refresh_token == mock_user.refresh_token
+
+
+def test_withings_provider_user_no_auth(provider: WithingsProvider) -> None:
+    provider._auth_client._authed_user = None
+
+    with pytest.raises(ValueError, match="^Not authenticated"):
+        provider.user
