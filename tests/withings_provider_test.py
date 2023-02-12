@@ -41,8 +41,8 @@ MOCK_AUTH_RESPONSE: Any = {
 def mock_env() -> Generator[None, None, None]:
     """Mock the environment variables."""
     mask_env = {
-        "EGGSTATS_CLIENT_ID": "",
-        "EGGSTATS_CLIENT_SECRET": "",
+        "WITHINGS_CLIENT_ID": "",
+        "WITHINGS_CLIENT_SECRET": "",
     }
 
     with patch.dict(os.environ, mask_env):
@@ -114,8 +114,8 @@ def test_AuthClient_raises_ValueError_if_no_client_id() -> None:
 
 
 def test_AuthClient_reads_secrets_from_env() -> None:
-    os.environ["EGGSTATS_CLIENT_ID"] = "foo"
-    os.environ["EGGSTATS_CLIENT_SECRET"] = "bar"
+    os.environ["WITHINGS_CLIENT_ID"] = "foo"
+    os.environ["WITHINGS_CLIENT_SECRET"] = "bar"
 
     auth_client = _AuthClient()
 
@@ -124,8 +124,8 @@ def test_AuthClient_reads_secrets_from_env() -> None:
 
 
 def test_AuthClient_reads_secrets_from_args() -> None:
-    os.environ["EGGSTATS_CLIENT_ID"] = "foo"
-    os.environ["EGGSTATS_CLIENT_SECRET"] = "bar"
+    os.environ["WITHINGS_CLIENT_ID"] = "foo"
+    os.environ["WITHINGS_CLIENT_SECRET"] = "bar"
 
     auth_client = _AuthClient("high", "low")
 
@@ -133,96 +133,55 @@ def test_AuthClient_reads_secrets_from_args() -> None:
     assert auth_client.client_secret == "low"
 
 
-def test_code_verifier(auth_client: _AuthClient) -> None:
-    result = auth_client._code_verifier()
+def test_get_state_code(auth_client: _AuthClient) -> None:
+    result01 = auth_client.create_state_code()
+    result02 = auth_client.create_state_code()
 
-    assert isinstance(result, str)
-
-
-def test_code_challenge(auth_client: _AuthClient) -> None:
-    verifier = "happy go lucky"
-    expected = "F9i_m3bYeE8Wrw_rHubiV4coAXzx9eDbRxK_1dVnfX0"
-    result = auth_client._code_challenge(verifier)
-
-    assert result == expected
+    assert result01 != result02
 
 
-def test_split_response(auth_client: _AuthClient) -> None:
-    response = "https://localhost:8080/?code=foo&state=bar"
-    expected = ("foo", "bar")
-    result = auth_client._split_response(response)
-
-    assert result == expected
-
-
-def test_get_response_url(auth_client: _AuthClient) -> None:
-    url = "https://account.withings.com/oauth2_user/authorize2"
-    expected = "https://localhost:8080/?code=foo&state=bar"
-
-    with patch("builtins.input", return_value=expected):
-        result = auth_client._get_response_url(url)
-
-    assert result == expected
-
-
-def test_get_auth_code(auth_client: _AuthClient) -> None:
+def test_get_authorization_url(auth_client: _AuthClient) -> None:
     resp = HTTPResponse(MagicMock())
     resp.url = "https://account.withings.com/oauth2_user/authorize2"
-    challenge = "mock_challenge"
-    rd_url = f"https://localhost:8080/?code=foo&state={challenge}"
-    expected = "foo"
+    state = "mock_challenge"
+    rd_url = "https://mock_redirect_url.com/mock"
+    scope = "mock_scope"
     expected_params = {
         "response_type": "code",
         "client_id": "mock",
-        "scope": withings_provider.SCOPES,
-        "state": challenge,
-        "redirect_uri": withings_provider.REDIRECT_URI,
+        "scope": scope,
+        "state": state,
+        "redirect_uri": rd_url,
     }
+    url = withings_provider.AUTH_URL
 
-    with patch.object(auth_client, "_code_challenge", return_value=challenge):
-        with patch.object(auth_client, "_handle_http", return_value=resp) as mock_http:
-            with patch.object(auth_client, "_get_response_url") as mock_input:
-                mock_input.return_value = rd_url
-                result = auth_client._get_auth_code()
+    with patch.object(auth_client, "_handle_http", return_value=resp) as mock_http:
+        result = auth_client.get_authorization_url(rd_url, scope, state)
 
-    mock_input.assert_called_once_with(resp.url)
-    assert result == expected
-    mock_http.assert_called_once_with(
-        "GET", withings_provider.AUTH_URL, params=expected_params
-    )
+    assert result == resp.url
+    mock_http.assert_called_once_with("GET", url, params=expected_params)
 
 
-def test_get_auth_code_challenge_mismatch(auth_client: _AuthClient) -> None:
-    resp = HTTPResponse(MagicMock())
-    resp.url = "https://account.withings.com/oauth2_user/authorize2"
-    challenge = "mock_challenge"
-    rd_url = "https://localhost:8080/?code=foo&state=bar"
-
-    with patch.object(auth_client, "_code_challenge", return_value=challenge):
-        with patch.object(auth_client, "_handle_http", return_value=resp):
-            with patch.object(auth_client, "_get_response_url") as mock_input:
-                mock_input.return_value = rd_url
-                with pytest.raises(ValueError, match="^Challenge"):
-                    auth_client._get_auth_code()
-
-
-def test_get_access_token(auth_client: _AuthClient) -> None:
+def test_authenticate(auth_client: _AuthClient) -> None:
     mockresp = HTTPResponse(MagicMock())
     mockresp._json = MOCK_AUTH_RESPONSE
+    code = "mockcode"
+    redirect_uri = "https://mock_redirect_url.com/mock"
     expected_params = {
         "action": "requesttoken",
         "client_id": "mock",
         "client_secret": "mock",
         "grant_type": "authorization_code",
-        "code": "mockcode",
-        "redirect_uri": withings_provider.REDIRECT_URI,
+        "code": code,
+        "redirect_uri": redirect_uri,
     }
     url = f"{withings_provider.BASE_URL}/v2/oauth2"
 
     with patch.object(auth_client, "_handle_http", return_value=mockresp) as mock_http:
-        result = auth_client._get_access_token("mockcode")
+        auth_client.authenticate(code, redirect_uri)
 
-    assert result.userid == MOCK_AUTH_RESPONSE["body"]["userid"]
+    assert auth_client._authed_user is not None
+    assert auth_client._authed_user.userid == MOCK_AUTH_RESPONSE["body"]["userid"]
     mock_http.assert_called_once_with("POST", url, params=expected_params)
 
 
@@ -232,18 +191,6 @@ def test_get_bearer_token_with_existing(auth_client: _AuthClient) -> None:
     result = auth_client._get_bearer_token()
 
     assert result == auth_client._authed_user.access_token
-
-
-def test_get_bearer_token_full_process(auth_client: _AuthClient) -> None:
-    with patch.object(auth_client, "_get_auth_code") as mock_code:
-        mock_code.return_value = "mockcode"
-        with patch.object(auth_client, "_get_access_token") as mock_token:
-            mock_token.return_value = _AuthedUser(**MOCK_AUTH_USER)
-            result = auth_client._get_bearer_token()
-
-    mock_code.assert_called_once()
-    mock_token.assert_called_once_with("mockcode")
-    assert result == MOCK_AUTH_RESPONSE["body"]["access_token"]
 
 
 def test_get_bearer_token_refresh(auth_client: _AuthClient) -> None:
@@ -256,6 +203,11 @@ def test_get_bearer_token_refresh(auth_client: _AuthClient) -> None:
 
     mock_refresh.assert_called_once()
     assert result == MOCK_AUTH_RESPONSE["body"]["access_token"]
+
+
+def test_get_bearer_token_no_authed_user(auth_client: _AuthClient) -> None:
+    with pytest.raises(ValueError, match="^Expected authenticated user.$"):
+        auth_client._get_bearer_token()
 
 
 def test_get_headers(auth_client: _AuthClient) -> None:
@@ -448,3 +400,47 @@ def test_withings_provider_user_no_auth(provider: WithingsProvider) -> None:
 
     with pytest.raises(ValueError, match="^Not authenticated"):
         provider.user
+
+
+def test_withings_provider_get_authentication_url(provider: WithingsProvider) -> None:
+    state = "mockstate"
+    redirect_uri = "https://mockurl.com"
+    scope = "mockscope"
+
+    with patch.object(provider._auth_client, "create_state_code", return_value=state):
+        with patch.object(provider._auth_client, "get_authorization_url") as mock:
+            url, state = provider.get_authentication_url(redirect_uri, scope)
+
+    mock.assert_called_once_with(redirect_uri, scope, state)
+    assert url == mock.return_value
+    assert state == state
+
+
+def test_withings_provider_authenticate(provider: WithingsProvider) -> None:
+    code = "mockcode"
+    redirect_uri = "https://mockurl.com"
+
+    with patch.object(provider._auth_client, "authenticate") as mock:
+        provider.authenticate(code, redirect_uri)
+
+    mock.assert_called_once_with(code, redirect_uri)
+
+
+# TODO: Move to where authentication happens
+def test_split_response() -> None:
+    response = "https://localhost:8080/?code=foo&state=bar"
+    expected = ("foo", "bar")
+    result = withings_provider.split_response(response)
+
+    assert result == expected
+
+
+# TODO: Move to where authentication happens
+def test_get_response_url() -> None:
+    url = "https://account.withings.com/oauth2_user/authorize2"
+    expected = "https://localhost:8080/?code=foo&state=bar"
+
+    with patch("builtins.input", return_value=expected):
+        result = withings_provider.get_response_url(url)
+
+    assert result == expected
