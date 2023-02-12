@@ -385,29 +385,6 @@ def test_withings_provider_handle_http_failure(provider: WithingsProvider) -> No
                 provider._handle_http("GET", "mock", {})
 
 
-def test_withings_provider_ecg_list(provider: WithingsProvider) -> None:
-    resp = [{"mock": "resp"}]
-    url = f"{withings_provider.BASE_URL}/v2/heart"
-    days = 12
-    timetime = 1234567890
-    timeoffset = timetime - (days * 24 * 60 * 60)
-    params = {
-        "action": "list",
-        "start_date": timeoffset,
-        "end_date": timetime,
-    }
-
-    # patch time to be consistent for the test
-    with patch("time.time", return_value=timetime):
-        with patch.object(
-            provider, "_handle_paginated", return_value=resp
-        ) as mock_http:
-            result = provider.ecg_list(days)
-
-    assert result == resp
-    mock_http.assert_called_once_with("series", "POST", url, params)
-
-
 def test_withings_provider_activity_list(provider: WithingsProvider) -> None:
     # NOTE: This will fail if run between 23:59:59 and 00:00:00
     resp = [{"mock": "resp"}]

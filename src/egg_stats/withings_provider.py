@@ -102,28 +102,6 @@ class WithingsProvider:
         self._http = httpx.Client(timeout=TIMEOUT)
         self._auth_client = _AuthClient(client_id, client_secret, self._http)
 
-    def ecg_list(self, number_of_days: int = 180) -> list[dict[str, Any]]:
-        """
-        Return a list of ECG records and Afib for a given period of time.
-
-        Args:
-            number_of_days: The number of days to get data for. Defaults to 180.
-
-        Returns:
-            A list of ECG records and Afib for a given period of time.
-
-        Raises:
-            ValueError: If the request fails.
-        """
-        self.logger.debug("Getting heart list for %s days", number_of_days)
-        params = {
-            "action": "list",
-            "start_date": int(time.time()) - number_of_days * 24 * 60 * 60,
-            "end_date": int(time.time()),
-        }
-        url = f"{BASE_URL}/v2/heart"
-        return self._handle_paginated("series", "POST", url, params)
-
     def activity_list(self, number_of_days: int = 7) -> list[dict[str, Any]]:
         """Get aggregated activity data for a given period of time."""
         self.logger.debug("Getting activity range for %s days", number_of_days)
