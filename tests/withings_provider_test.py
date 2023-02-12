@@ -409,21 +409,33 @@ def test_withings_provider_get_authentication_url(provider: WithingsProvider) ->
 
     with patch.object(provider._auth_client, "create_state_code", return_value=state):
         with patch.object(provider._auth_client, "get_authorization_url") as mock:
-            url, state = provider.get_authentication_url(redirect_uri, scope)
+            url = provider.get_authentication_url(redirect_uri, scope)
 
     mock.assert_called_once_with(redirect_uri, scope, state)
     assert url == mock.return_value
-    assert state == state
+    assert provider._last_state == state
 
 
 def test_withings_provider_authenticate(provider: WithingsProvider) -> None:
     code = "mockcode"
+    state = "mockstate"
     redirect_uri = "https://mockurl.com"
+    provider._last_state = state
 
     with patch.object(provider._auth_client, "authenticate") as mock:
-        provider.authenticate(code, redirect_uri)
+        provider.authenticate(code, state, redirect_uri)
 
     mock.assert_called_once_with(code, redirect_uri)
+
+
+def test_withings_provider_authenticate_bad_state(provider: WithingsProvider) -> None:
+    code = "mockcode"
+    state = "mockstate"
+    redirect_uri = "https://mockurl.com"
+    provider._last_state = "badstate"
+
+    with pytest.raises(ValueError, match="^Invalid state"):
+        provider.authenticate(code, state, redirect_uri)
 
 
 # TODO: Move to where authentication happens

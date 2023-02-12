@@ -107,10 +107,11 @@ class WithingsProvider:
         """Initialize the Withings API."""
         self._http = httpx.Client(timeout=TIMEOUT)
         self._auth_client = _AuthClient(client_id, client_secret, self._http)
+        self._last_state: str | None = None
 
     @property
     def user(self) -> AuthedUser:
-        """Return the authenticated user."""
+        """Return the authenticated user id with refresh token."""
         if not self._auth_client._authed_user:
             raise ValueError("Not authenticated, call authenticate() first.")
 
@@ -123,49 +124,62 @@ class WithingsProvider:
         self,
         redirect_uri: str,
         scope: str | None = None,
-    ) -> tuple[str, str]:
+    ) -> str:
         """
         Get the URL to redirect the user to for authentication.
 
         The calling application must redirect the user to the returned URL. Once
         the user accepts the request the redirect URL will contain both a code
-        and a state. The code can be used to retrieve an access token.
-
-        The state is a random string that is used to prevent CSRF attacks and
-        should match the state returned by this method.
+        and a state with are used to authenticate the user.
 
         Args:
             redirect_uri: The URL to redirect the user to after authentication.
             scope: The scope of access request. (default: user.activity,user.metrics)
 
         Returns:
-            A tuple containing the URL to redirect the user to and the state.
+            The URL to redirect the user to.
 
         Raises:
             ValueError
         """
         scope = scope or SCOPES
         state = self._auth_client.create_state_code()
+        self._last_state = state
 
         uri = self._auth_client.get_authorization_url(redirect_uri, scope, state)
 
-        return uri, state
+        return uri
 
-    def authenticate(self, code: str, redirect_uri: str) -> None:
+    def authenticate(self, code: str, state: str, redirect_uri: str) -> None:
         """
         Authenticate with the API.
 
         Args:
             code: The code returned by the authentication URL.
+            state: The state returned by the authentication URL.
             redirect_uri: The redirect URI used when requesting the code.
 
         Raises:
             ValueError
         """
+        if not self._last_state or self._last_state != state:
+            raise ValueError("Invalid state code.")
+
         self._auth_client.authenticate(code, redirect_uri)
 
     def activity_list(self, number_of_days: int = 7) -> list[dict[str, Any]]:
-        """Get aggregated activity data for a given period of time."""
+        """
+        Get aggregated activity data for a given period of time.
+
+        Args:
+            number_of_days: The number of days to get data for.
+
+        Returns:
+            A list of activity data.
+
+        Raises:
+            ValueError: If not authenticated.
+        """
         self.logger.debug("Getting activity range for %s days", number_of_days)
         starttime = int(time.time()) - number_of_days * 24 * 60 * 60
         startdateymd = time.strftime("%Y-%m-%d", time.localtime(starttime))
@@ -406,15 +420,12 @@ if __name__ == "__main__":
 
     withings_provider = WithingsProvider()
 
-    auth_url, state = withings_provider.get_authentication_url(REDIRECT_URI, SCOPES)
+    auth_url = withings_provider.get_authentication_url(REDIRECT_URI, SCOPES)
 
     response = get_response_url(auth_url)
-    code, returned_state = split_response(response)
+    code, state = split_response(response)
 
-    if returned_state != state:
-        raise ValueError("Returned state does not match")
-
-    withings_provider.authenticate(code, REDIRECT_URI)
+    withings_provider.authenticate(code, state, REDIRECT_URI)
 
     print(withings_provider._auth_client.get_headers())
 
