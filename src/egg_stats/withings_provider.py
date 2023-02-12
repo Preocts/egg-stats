@@ -65,6 +65,12 @@ class HTTPResponse:
 
 
 @dataclass
+class AuthedUser:
+    userid: str
+    refresh_token: str
+
+
+@dataclass
 class _AuthedUser:
     userid: str
     access_token: str
@@ -101,31 +107,79 @@ class WithingsProvider:
         """Initialize the Withings API."""
         self._http = httpx.Client(timeout=TIMEOUT)
         self._auth_client = _AuthClient(client_id, client_secret, self._http)
+        self._last_state: str | None = None
 
-    def ecg_list(self, number_of_days: int = 180) -> list[dict[str, Any]]:
+    @property
+    def user(self) -> AuthedUser:
+        """Return the authenticated user id with refresh token."""
+        if not self._auth_client._authed_user:
+            raise ValueError("Not authenticated, call authenticate() first.")
+
+        return AuthedUser(
+            userid=self._auth_client._authed_user.userid,
+            refresh_token=self._auth_client._authed_user.refresh_token,
+        )
+
+    def get_authentication_url(
+        self,
+        redirect_uri: str,
+        scope: str | None = None,
+    ) -> str:
         """
-        Return a list of ECG records and Afib for a given period of time.
+        Get the URL to redirect the user to for authentication.
+
+        The calling application must redirect the user to the returned URL. Once
+        the user accepts the request the redirect URL will contain both a code
+        and a state with are used to authenticate the user.
 
         Args:
-            number_of_days: The number of days to get data for. Defaults to 180.
+            redirect_uri: The URL to redirect the user to after authentication.
+            scope: The scope of access request. (default: user.activity,user.metrics)
 
         Returns:
-            A list of ECG records and Afib for a given period of time.
+            The URL to redirect the user to.
 
         Raises:
-            ValueError: If the request fails.
+            ValueError
         """
-        self.logger.debug("Getting heart list for %s days", number_of_days)
-        params = {
-            "action": "list",
-            "start_date": int(time.time()) - number_of_days * 24 * 60 * 60,
-            "end_date": int(time.time()),
-        }
-        url = f"{BASE_URL}/v2/heart"
-        return self._handle_paginated("series", "POST", url, params)
+        scope = scope or SCOPES
+        state = self._auth_client.create_state_code()
+        self._last_state = state
+
+        uri = self._auth_client.get_authorization_url(redirect_uri, scope, state)
+
+        return uri
+
+    def authenticate(self, code: str, state: str, redirect_uri: str) -> None:
+        """
+        Authenticate with the API.
+
+        Args:
+            code: The code returned by the authentication URL.
+            state: The state returned by the authentication URL.
+            redirect_uri: The redirect URI used when requesting the code.
+
+        Raises:
+            ValueError
+        """
+        if not self._last_state or self._last_state != state:
+            raise ValueError("Invalid state code.")
+
+        self._auth_client.authenticate(code, redirect_uri)
 
     def activity_list(self, number_of_days: int = 7) -> list[dict[str, Any]]:
-        """Get aggregated activity data for a given period of time."""
+        """
+        Get aggregated activity data for a given period of time.
+
+        Args:
+            number_of_days: The number of days to get data for.
+
+        Returns:
+            A list of activity data.
+
+        Raises:
+            ValueError: If not authenticated.
+        """
         self.logger.debug("Getting activity range for %s days", number_of_days)
         starttime = int(time.time()) - number_of_days * 24 * 60 * 60
         startdateymd = time.strftime("%Y-%m-%d", time.localtime(starttime))
@@ -197,8 +251,8 @@ class _AuthClient:
         can be provided as arguments or as environment variables.
 
         Optional environment variables:
-            EGGSTATS_CLIENT_ID: The client ID.
-            EGGSTATS_CLIENT_SECRET: The client secret.
+            WITHINGS_CLIENT_ID: The client ID.
+            WITHINGS_CLIENT_SECRET: The client secret.
 
         Args:
             client_id: The client ID. Defaults to None.
@@ -207,8 +261,8 @@ class _AuthClient:
         Raises:
             ValueError: If the client ID or client secret is not provided.
         """
-        self.client_id = client_id or os.environ.get("EGGSTATS_CLIENT_ID")
-        self.client_secret = client_secret or os.environ.get("EGGSTATS_CLIENT_SECRET")
+        self.client_id = client_id or os.environ.get("WITHINGS_CLIENT_ID")
+        self.client_secret = client_secret or os.environ.get("WITHINGS_CLIENT_SECRET")
         self._http = http or httpx.Client(timeout=TIMEOUT)
         self._authed_user: _AuthedUser | None = None
 
@@ -224,54 +278,56 @@ class _AuthClient:
 
     def _get_bearer_token(self) -> str:
         """Get the bearer token."""
-        if self._authed_user is None:
-            auth_code = self._get_auth_code()
-            self._authed_user = self._get_access_token(auth_code)
-        elif self._authed_user.expiry < time.time():
+        if not self._authed_user:
+            raise ValueError("Expected authenticated user.")
+
+        if self._authed_user.expiry < time.time():
             self._authed_user = self._refresh_access_token(self._authed_user)
         return self._authed_user.access_token
 
-    def _get_auth_code(self) -> str:
-        """Get the authorization code."""
-        self.logger.debug("Getting auth code for client_id %s", self.client_id)
-        code_verifier = self._code_verifier()
-        code_challenge = self._code_challenge(code_verifier)
+    def get_authorization_url(self, redirect_uri: str, scope: str, state: str) -> str:
+        """
+        Get the authorization url.
+
+        Args:
+            redirect_uri: The URL to redirect the user to after authentication.
+            scope: The scope of access request.
+            state: The state to use for the request.
+
+        Returns:
+            The authorization URL.
+        """
+        self.logger.debug(
+            "Getting authorization uri with scope %s and redirect uri %s",
+            scope,
+            redirect_uri,
+        )
 
         params = {
             "response_type": "code",
             "client_id": self.client_id,
-            "scope": SCOPES,
-            "state": code_challenge,
-            "redirect_uri": REDIRECT_URI,
+            "scope": scope,
+            "state": state,
+            "redirect_uri": redirect_uri,
         }
 
         resp = self._handle_http("GET", AUTH_URL, params=params)
 
-        # User needs to authorize the app
-        self.logger.debug("User needs to authorize the app...")
-        response_url = self._get_response_url(resp.url)
-        code, state = self._split_response(response_url)
+        return resp.url
 
-        if code_challenge != state:
-            raise ValueError(
-                f"Challenge ({code_challenge}) does not match state ({state})."
-            )
-
-        return code
-
-    def _get_access_token(self, code: str) -> _AuthedUser:
-        """Get the access token given the authorization code."""
-        self.logger.debug("Getting access token for client_id %s", self.client_id)
+    def authenticate(self, code: str, redirect_uri: str) -> None:
+        """Authenticate the user."""
+        self.logger.debug("Authenticating user with code ...%s", code[-6:])
         params = {
             "action": "requesttoken",
             "client_id": self.client_id,
             "client_secret": self.client_secret,
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": REDIRECT_URI,
+            "redirect_uri": redirect_uri,
         }
         resp = self._handle_http("POST", f"{BASE_URL}/v2/oauth2", params=params)
-        return _AuthedUser.from_dict(resp.json()["body"])
+        self._authed_user = _AuthedUser.from_dict(resp.json()["body"])
 
     def _refresh_access_token(self, authed_user: _AuthedUser) -> _AuthedUser:
         """Refresh the access token."""
@@ -329,31 +385,48 @@ class _AuthClient:
         return resp
 
     @staticmethod
-    def _get_response_url(url: str) -> str:
-        """Get the response URL."""
-        # Extracted from _get_auth_code to allow inserting a local api server easily.
-        print("Please visit the following URL to authorize the app:")
-        print(url, end="\n\n")
-        print("Authorize the app, then copy the URL you are redirected to.")
-        print(f"It should look like {REDIRECT_URI}/?code=...&state=...", end="\n\n")
-        return input("Enter the URL: ")
-
-    @staticmethod
-    def _split_response(response: str) -> tuple[str, str]:
-        """Split the response into the code and state."""
-        code = response.split("code=")[1].split("&")[0]
-        state = response.split("state=")[1].split("&")[0]
-        return code, state
-
-    @staticmethod
-    def _code_verifier() -> str:
-        """Create a code verifier."""
+    def create_state_code() -> str:
+        """Create a state code used for the authorization request."""
         code_verifier = base64.urlsafe_b64encode(os.urandom(30)).decode("utf-8")
-        return re.sub("[^a-zA-Z0-9]+", "", code_verifier)
+        code_verifier = re.sub("[^a-zA-Z0-9]+", "", code_verifier)
 
-    @staticmethod
-    def _code_challenge(code_verifier: str) -> str:
-        """Create a code challenge."""
         code_byte = hashlib.sha256(code_verifier.encode("utf-8")).digest()
         code_challenge = base64.urlsafe_b64encode(code_byte).decode("utf-8")
         return code_challenge.replace("=", "")
+
+
+def get_response_url(url: str) -> str:
+    """Get the response URL."""
+    # Extracted from _get_auth_code to allow inserting a local api server easily.
+    print("Please visit the following URL to authorize the app:")
+    print(url, end="\n\n")
+    print("Authorize the app, then copy the URL you are redirected to.")
+    print(f"It should look like {REDIRECT_URI}/?code=...&state=...", end="\n\n")
+    return input("Enter the URL: ")
+
+
+def split_response(response: str) -> tuple[str, str]:
+    """Split the response into the code and state."""
+    code = response.split("code=")[1].split("&")[0]
+    state = response.split("state=")[1].split("&")[0]
+    return code, state
+
+
+if __name__ == "__main__":
+    from secretbox import SecretBox
+
+    SecretBox(auto_load=True)
+    logging.basicConfig(level=logging.DEBUG)
+
+    withings_provider = WithingsProvider()
+
+    auth_url = withings_provider.get_authentication_url(REDIRECT_URI, SCOPES)
+
+    response = get_response_url(auth_url)
+    code, state = split_response(response)
+
+    withings_provider.authenticate(code, state, REDIRECT_URI)
+
+    print(withings_provider._auth_client.get_headers())
+
+    print(withings_provider.activity_list())
