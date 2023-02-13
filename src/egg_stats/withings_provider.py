@@ -269,6 +269,13 @@ class _AuthClient:
         if not self.client_id or not self.client_secret:
             raise ValueError("client_id and client_secret are required.")
 
+    @property
+    def authed_user(self) -> _AuthedUser:
+        """Return the authenticated user."""
+        if not self._authed_user:
+            raise ValueError("Expected authenticated user.")
+        return self._authed_user
+
     def get_headers(self) -> dict[str, str]:
         """Return the headers for the API."""
         return {
@@ -344,15 +351,14 @@ class _AuthClient:
 
     def _revoke_access_token(self) -> bool:
         """Revoke the access token."""
-        userid = self._authed_user.userid if self._authed_user else ""
-        self.logger.debug("Revoking access token for user %s", userid)
+        self.logger.debug("Revoking access token for user %s", self.authed_user.userid)
         nonce = self.get_nonce()
         params = {
             "action": "revoke",
             "client_id": self.client_id,
             "nonce": nonce,
             "signature": self.get_signature("revoke", nonce),
-            "userid": userid,
+            "userid": self.authed_user.userid,
         }
         self._handle_http("POST", f"{BASE_URL}/v2/oauth2", params=params)
         return True
