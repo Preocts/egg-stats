@@ -133,6 +133,13 @@ def test_AuthClient_reads_secrets_from_args() -> None:
     assert auth_client.client_secret == "low"
 
 
+def test_AuthClient_authed_user_property_raises_ValueError_if_no_authed_user() -> None:
+    auth_client = _AuthClient("mock", "mock", MagicMock())
+
+    with pytest.raises(ValueError):
+        auth_client.authed_user
+
+
 def test_get_state_code(auth_client: _AuthClient) -> None:
     result01 = auth_client.create_state_code()
     result02 = auth_client.create_state_code()
@@ -220,8 +227,11 @@ def test_get_headers(auth_client: _AuthClient) -> None:
 
 
 def test_refresh_access_token(auth_client: _AuthClient) -> None:
+    auth_client._authed_user = _AuthedUser(**MOCK_AUTH_USER)
+    auth_client._authed_user.access_token = "some_old_token"
     mockresp = HTTPResponse(MagicMock())
     mockresp._json = MOCK_AUTH_RESPONSE
+    expected_token = MOCK_AUTH_RESPONSE["body"]["access_token"]
     expected_params = {
         "action": "requesttoken",
         "client_id": "mock",
@@ -232,9 +242,9 @@ def test_refresh_access_token(auth_client: _AuthClient) -> None:
     url = f"{withings_provider.BASE_URL}/v2/oauth2"
 
     with patch.object(auth_client, "_handle_http", return_value=mockresp) as mock_http:
-        result = auth_client._refresh_access_token(_AuthedUser(**MOCK_AUTH_USER))
+        auth_client._refresh_access_token()
 
-    assert result.userid == MOCK_AUTH_USER["userid"]
+    assert auth_client._authed_user.access_token == expected_token
     mock_http.assert_called_once_with("POST", url, params=expected_params)
 
 
