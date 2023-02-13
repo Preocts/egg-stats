@@ -289,7 +289,8 @@ class _AuthClient:
             raise ValueError("Expected authenticated user.")
 
         if self._authed_user.expiry < time.time():
-            self._authed_user = self._refresh_access_token(self._authed_user)
+            self._refresh_access_token()
+
         return self._authed_user.access_token
 
     def get_authorization_url(self, redirect_uri: str, scope: str, state: str) -> str:
@@ -336,7 +337,7 @@ class _AuthClient:
         resp = self._handle_http("POST", f"{BASE_URL}/v2/oauth2", params=params)
         self._authed_user = _AuthedUser.from_dict(resp.json()["body"])
 
-    def _refresh_access_token(self, authed_user: _AuthedUser) -> _AuthedUser:
+    def _refresh_access_token(self) -> None:
         """Refresh the access token."""
         self.logger.debug("Refreshing access token for client_id %s", self.client_id)
         params = {
@@ -344,12 +345,12 @@ class _AuthClient:
             "client_id": self.client_id,
             "client_secret": self.client_secret,
             "grant_type": "refresh_token",
-            "refresh_token": authed_user.refresh_token,
+            "refresh_token": self.authed_user.refresh_token,
         }
         resp = self._handle_http("POST", f"{BASE_URL}/v2/oauth2", params=params)
-        return _AuthedUser.from_dict(resp.json()["body"])
+        self._authed_user = _AuthedUser.from_dict(resp.json()["body"])
 
-    def _revoke_access_token(self) -> bool:
+    def _revoke_access_token(self) -> None:
         """Revoke the access token."""
         self.logger.debug("Revoking access token for user %s", self.authed_user.userid)
         nonce = self.get_nonce()
@@ -361,7 +362,6 @@ class _AuthClient:
             "userid": self.authed_user.userid,
         }
         self._handle_http("POST", f"{BASE_URL}/v2/oauth2", params=params)
-        return True
 
     def get_nonce(self) -> str:
         """Get a nonce."""
