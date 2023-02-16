@@ -94,6 +94,32 @@ class _AuthedUser:
         )
 
 
+@dataclass(frozen=True)
+class Activity:
+    steps: int
+    distance: float
+    elevation: float
+    soft: float
+    moderate: float
+    intense: float
+    active: float
+    calories: float
+    totalcalories: float
+    hr_average: int
+    hr_min: int
+    hr_max: int
+    hr_zone_0: int
+    hr_zone_1: int
+    hr_zone_3: int
+    deviceid: None
+    hash_deviceid: None
+    timezone: str
+    date: str
+    modified: int
+    brand: int
+    is_tracker: bool
+
+
 class WithingsProvider:
     """Representation for the Withings API."""
 
@@ -167,7 +193,7 @@ class WithingsProvider:
 
         self._auth_client.authenticate(code, redirect_uri)
 
-    def activity_list(self, number_of_days: int = 7) -> list[dict[str, Any]]:
+    def activity_list(self, number_of_days: int = 7) -> list[Activity]:
         """
         Get aggregated activity data for a given period of time.
 
@@ -191,7 +217,9 @@ class WithingsProvider:
             "data_fields": ",".join(DATA_FIELDS),
         }
         url = f"{BASE_URL}/v2/measure"
-        return self._handle_paginated("activities", "POST", url, params)
+        activities = self._handle_paginated("activities", "POST", url, params)
+
+        return [Activity(**activity) for activity in activities]
 
     def _handle_paginated(
         self,
