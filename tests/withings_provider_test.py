@@ -276,8 +276,8 @@ def test_get_nonce(auth_client: _AuthClient) -> None:
 
 def test_revoke_access_token(auth_client: _AuthClient) -> None:
     auth_client._authed_user = _AuthedUser(**MOCK_AUTH_USER)
-    mock_resp = MagicMock(status_code=200, json=MagicMock())
-    mock_resp.json.return_value = {"status": 0, "body": {}}
+    mockresp = HTTPResponse(MagicMock())
+    mockresp._json = {"status": 0, "body": {}}
     set_nonce = "mocknonce"
     expected_params = {
         "action": "revoke",
@@ -288,7 +288,7 @@ def test_revoke_access_token(auth_client: _AuthClient) -> None:
     }
     url = f"{withings_provider.BASE_URL}/v2/oauth2"
 
-    with patch.object(auth_client._http, "request", return_value=mock_resp) as mockhttp:
+    with patch.object(auth_client, "_handle_http", return_value=mockresp) as mockhttp:
         with patch.object(auth_client, "get_nonce", return_value=set_nonce):
             auth_client._revoke_access_token()
 
