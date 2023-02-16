@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from egg_stats.withings_model import Activity
 
 EXPIRY_BUFFER = 60  # seconds
 TIMEOUT = 30  # seconds
@@ -167,7 +168,7 @@ class WithingsProvider:
 
         self._auth_client.authenticate(code, redirect_uri)
 
-    def activity_list(self, number_of_days: int = 7) -> list[dict[str, Any]]:
+    def activity_list(self, number_of_days: int = 7) -> list[Activity]:
         """
         Get aggregated activity data for a given period of time.
 
@@ -191,7 +192,9 @@ class WithingsProvider:
             "data_fields": ",".join(DATA_FIELDS),
         }
         url = f"{BASE_URL}/v2/measure"
-        return self._handle_paginated("activities", "POST", url, params)
+        activities = self._handle_paginated("activities", "POST", url, params)
+
+        return [Activity(**activity) for activity in activities]
 
     def _handle_paginated(
         self,

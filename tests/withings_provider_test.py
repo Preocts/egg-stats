@@ -10,11 +10,11 @@ from unittest.mock import patch
 
 import pytest
 from egg_stats import withings_provider
+from egg_stats.withings_model import Activity
 from egg_stats.withings_provider import _AuthClient
 from egg_stats.withings_provider import _AuthedUser
 from egg_stats.withings_provider import HTTPResponse
 from egg_stats.withings_provider import WithingsProvider
-
 
 MOCK_AUTH_USER: Any = {
     "userid": "mockuserid",
@@ -35,6 +35,32 @@ MOCK_AUTH_RESPONSE: Any = {
         "token_type": "Bearer",
     },
 }
+MOCK_ACTIVITY_RESPONSE: Any = [
+    {
+        "steps": 55,
+        "distance": 44.71,
+        "elevation": 0,
+        "soft": 240,
+        "moderate": 0,
+        "intense": 0,
+        "active": 0,
+        "calories": 1.91,
+        "totalcalories": 2066.383,
+        "hr_average": 71,
+        "hr_min": 62,
+        "hr_max": 84,
+        "hr_zone_0": 7241,
+        "hr_zone_1": 0,
+        "hr_zone_3": 0,
+        "deviceid": None,
+        "hash_deviceid": None,
+        "timezone": "America/New_York",
+        "date": "2023-01-28",
+        "modified": 1675059819,
+        "brand": 18,
+        "is_tracker": True,
+    }
+]
 
 
 @pytest.fixture(autouse=True)
@@ -349,10 +375,11 @@ def test_withings_provider_handle_http_failure(provider: WithingsProvider) -> No
 
 def test_withings_provider_activity_list(provider: WithingsProvider) -> None:
     # NOTE: This will fail if run between 23:59:59 and 00:00:00
-    resp = [{"mock": "resp"}]
+    resp = MOCK_ACTIVITY_RESPONSE
     url = f"{withings_provider.BASE_URL}/v2/measure"
     days = 12
     starttime = int(time.time()) - (days * 24 * 60 * 60)
+    expected = [Activity(**activity) for activity in MOCK_ACTIVITY_RESPONSE]
 
     params = {
         "action": "getactivity",
@@ -364,7 +391,7 @@ def test_withings_provider_activity_list(provider: WithingsProvider) -> None:
     with patch.object(provider, "_handle_paginated", return_value=resp) as mock_http:
         result = provider.activity_list(days)
 
-    assert result == resp
+    assert result == expected
     mock_http.assert_called_once_with("activities", "POST", url, params)
 
 
