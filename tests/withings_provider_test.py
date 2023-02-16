@@ -10,9 +10,9 @@ from unittest.mock import patch
 
 import pytest
 from egg_stats import withings_provider
-from egg_stats.withings_model import Activity
 from egg_stats.withings_provider import _AuthClient
 from egg_stats.withings_provider import _AuthedUser
+from egg_stats.withings_provider import Activity
 from egg_stats.withings_provider import HTTPResponse
 from egg_stats.withings_provider import WithingsProvider
 
